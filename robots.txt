@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://abajis244.github.io/iron-carbon-sim/sitemap.xml
