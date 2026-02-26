@@ -1,5 +1,5 @@
 {
-  "homepage": "https://<your-github-username>.github.io/iron-carbon-sim",
+  "homepage": "https://Abajis244.github.io/iron-carbon-sim",
   "name": "iron-carbon-sim",
   "private": true,
   "version": "0.0.0",
@@ -13,19 +13,23 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "lucide-react": "^0.575.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@tailwindcss/postcss": "^4.2.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "autoprefixer": "^10.4.24",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
-    "tailwindcss": "^4.2.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.2.1",
     "vite": "^8.0.0-beta.13"
   },
   "overrides": {
