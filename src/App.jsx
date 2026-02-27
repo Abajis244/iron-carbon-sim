@@ -523,7 +523,7 @@ export default function App() {
 
   const copyReport = () => {
     const report = `
-AFIT-SteelLab Analytical Report
+ABAJIS-SteelLab Analytical Report
 -----------------------------
 Carbon Content: ${carbon.toFixed(3)} wt%
 Temperature: ${temp.toFixed(1)} °C
@@ -549,12 +549,12 @@ Predicted Properties:
   };
 
   const downloadReport = () => {
-    const report = `AFIT-SteelLab Analytical Report\n-----------------------------\nCarbon Content: ${carbon.toFixed(3)} wt%\nTemperature: ${temp.toFixed(1)} °C\nState: ${simState.isQuenched ? 'Quenched (Martensitic)' : 'Equilibrium'}\n\nPhase Constitution:\n${simState.fractions.map(f => `- ${f.name}: ${f.frac.toFixed(2)}% (C=${f.pos.toFixed(3)}%)`).join('\n')}\n\nPredicted Properties:\n- Microstructure: ${simState.micro}\n- Lattice Structure: ${simState.crystal}\n- Yield Strength: ${simState.yield} MPa\n- Ultimate Tensile Strength: ${simState.uts} MPa\n- Hardness: ${simState.hardness} HV\n- Elongation: ${simState.elong}%\n- Weldability: ${weldStatus.rating}`;
+    const report = `ABAJIS-SteelLab Analytical Report\n-----------------------------\nCarbon Content: ${carbon.toFixed(3)} wt%\nTemperature: ${temp.toFixed(1)} °C\nState: ${simState.isQuenched ? 'Quenched (Martensitic)' : 'Equilibrium'}\n\nPhase Constitution:\n${simState.fractions.map(f => `- ${f.name}: ${f.frac.toFixed(2)}% (C=${f.pos.toFixed(3)}%)`).join('\n')}\n\nPredicted Properties:\n- Microstructure: ${simState.micro}\n- Lattice Structure: ${simState.crystal}\n- Yield Strength: ${simState.yield} MPa\n- Ultimate Tensile Strength: ${simState.uts} MPa\n- Hardness: ${simState.hardness} HV\n- Elongation: ${simState.elong}%\n- Weldability: ${weldStatus.rating}`;
     const blob = new Blob([report], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `AFIT_SteelLab_Report_${carbon.toFixed(2)}C_${temp.toFixed(0)}C.txt`;
+    a.download = `ABAJIS_SteelLab_Report_${carbon.toFixed(2)}C_${temp.toFixed(0)}C.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -617,10 +617,10 @@ Predicted Properties:
           </div>
           <div>
             <h1 className="text-xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-rose-500 dark:from-indigo-400 dark:to-rose-400">
-              AFIT-SteelLab Analytical Engine
+              ABAJIS-SteelLab Analytical Engine
             </h1>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className={`text-[10px] font-mono tracking-widest ${theme.textMuted}`}>AFIT KERNEL v8.0 ELITE</span>
+              <span className={`text-[10px] font-mono tracking-widest ${theme.textMuted}`}>ABAJIS KERNEL v2.0 ELITE</span>
               <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${isDark ? 'bg-emerald-900/50 text-emerald-400 border border-emerald-800' : 'bg-emerald-100 text-emerald-700 border border-emerald-200'}`}>
                 Full Telemetry Active
               </span>
