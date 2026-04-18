@@ -1714,6 +1714,96 @@ const InverseDesignSection = () => {
   );
 };
 
+
+const WeldabilityNavigator = React.memo(() => {
+  // Use activeGrade instead of alloy since your provider tracks carbon + activeGrade
+  const { activeGrade } = useThermoState();
+  const { geometry, maxC, isDark, zoomSteel } = useThermoAction();
+  const { mapX, m, h, innerH } = geometry;
+
+ // Calculate the non-carbon CE penalty based on the active grade (if one is selected)
+  let cePenalty = 0;
+  if (activeGrade) {
+    cePenalty = (activeGrade.mn / 6) + ((activeGrade.cr + activeGrade.mo + activeGrade.v) / 5) + ((activeGrade.ni + activeGrade.cu) / 15);
+  } else {
+    // Apply the standard 0.5% Mn default penalty so the visual matches the Telemetry panel
+    cePenalty = 0.5 / 6; 
+  }
+  
+  // Calculate shifting critical carbon thresholds
+  const cExcellent = Math.max(0, 0.35 - cePenalty);
+  const cFair = Math.max(0, 0.50 - cePenalty);
+  
+  // If the view is zoomed in (Steel View), restrict the max drawing boundary
+  const displayMaxC = zoomSteel ? 2.5 : CONSTANTS.FE_C.C_AUSTENITE_MAX;
+
+  // Map thresholds to SVG X-coordinates
+  const xStart = mapX(0);
+  const xExcellent = mapX(Math.min(displayMaxC, cExcellent));
+  const xFair = mapX(Math.min(displayMaxC, cFair));
+  const xMax = mapX(displayMaxC);
+
+  // If penalty > 0.50, everything is unweldable (zones collapse to 0)
+  const showExcellent = cExcellent > 0;
+  const showFair = cFair > 0 && xFair > xExcellent;
+
+  return (
+    <g className="weldability-overlay pointer-events-none transition-all duration-500">
+      <defs>
+        <linearGradient id="grad-excellent" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#10b981" stopOpacity={isDark ? "0.15" : "0.1"} />
+          <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="grad-fair" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#f59e0b" stopOpacity={isDark ? "0.15" : "0.1"} />
+          <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="grad-poor" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#f43f5e" stopOpacity={isDark ? "0.15" : "0.1"} />
+          <stop offset="100%" stopColor="#f43f5e" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      <clipPath id="weldability-clip">
+        <rect x={m.left} y={m.top} width={geometry.innerW} height={innerH} />
+      </clipPath>
+
+      <g clipPath="url(#weldability-clip)">
+        {showExcellent && (
+          <rect x={xStart} y={m.top} width={xExcellent - xStart} height={innerH} fill="url(#grad-excellent)" />
+        )}
+        
+        {showFair && (
+          <rect x={xExcellent} y={m.top} width={xFair - xExcellent} height={innerH} fill="url(#grad-fair)" />
+        )}
+
+        {xFair < xMax && (
+          <rect x={xFair} y={m.top} width={xMax - xFair} height={innerH} fill="url(#grad-poor)" />
+        )}
+
+        {showExcellent && (
+          <g>
+            <line x1={xExcellent} y1={m.top} x2={xExcellent} y2={h - m.bottom} stroke="#10b981" strokeWidth="2" strokeDasharray="6,4" opacity="0.6" />
+            <text x={xExcellent - 5} y={m.top + 20} transform={`rotate(-90 ${xExcellent - 5} ${m.top + 20})`} className="text-[10px] font-black uppercase tracking-widest fill-emerald-500 opacity-80" textAnchor="end">
+              CE 0.35 Limit
+            </text>
+          </g>
+        )}
+
+        {showFair && (
+          <g>
+            <line x1={xFair} y1={m.top} x2={xFair} y2={h - m.bottom} stroke="#f59e0b" strokeWidth="2" strokeDasharray="6,4" opacity="0.6" />
+            <text x={xFair - 5} y={m.top + 20} transform={`rotate(-90 ${xFair - 5} ${m.top + 20})`} className="text-[10px] font-black uppercase tracking-widest fill-amber-500 opacity-80" textAnchor="end">
+              CE 0.50 Limit
+            </text>
+          </g>
+        )}
+      </g>
+    </g>
+  );
+});
+
+
 const DiagramSection = () => {
   const { carbon, temp, historyTrail, simState } = useThermoState();
   const { svgRef, setCarbon, setTemp, changeMode, maxC, geometry, theme, isDark } = useThermoAction();
@@ -1747,6 +1837,10 @@ const DiagramSection = () => {
 
        <svg ref={svgRef} width="100%" viewBox={`0 0 ${geometry.w} ${geometry.h}`} style={{ touchAction: 'none' }} className={cn("w-full h-full font-sans select-none overflow-hidden block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500", theme.diagramBgClass, isDragging ? 'cursor-grabbing' : 'cursor-crosshair')} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onKeyDown={handleSVGKeyDown} tabIndex="0" role="application" aria-label="Interactive Iron-Carbon Phase Diagram">
           <DiagramSkeleton />
+          
+          {/* CORRECT PLACEMENT: Inject the novel weldability space navigator here */}
+          <WeldabilityNavigator /> 
+          
           <g className="pointer-events-none">
             {historyPointsStr && (
               <>
