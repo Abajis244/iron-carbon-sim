@@ -5,13 +5,13 @@ import {
   Beaker, Flame, Activity, Download, Camera, Plus, Minus, 
   Shield, LineChart, FileSpreadsheet, Trash2, Lightbulb, 
   AlertTriangle, Info, Database, Share2, Loader2,
-  RefreshCw, Crosshair, Image as ImageIcon, Magnet, Github, Link as LinkIcon, Wand2
+  RefreshCw, Crosshair, Image as ImageIcon, Magnet, Github, Link as LinkIcon, Wand2, Settings, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 // ============================================================================
 // MODULE: CONFIGURATION & CONSTANTS
 // ============================================================================
-const APP_VERSION = "v14.5 PRO (Kinetic TTT Update)";
+const APP_VERSION = "v14.6 PRO (Alloy Navigator Update)";
 
 const CONSTANTS = {
   FE_C: {
@@ -20,7 +20,7 @@ const CONSTANTS = {
     C_PURE: 0.00, C_FERRITE_MAX: 0.022, C_PERITECTIC_S: 0.09, C_PERITECTIC_G: 0.17,
     C_PERITECTIC_L: 0.53, C_EUTECTOID: 0.76, C_AUSTENITE_MAX: 2.11, C_EUTECTIC: 4.30, C_CEMENTITE: 6.67,
   },
-  RATES: { ANNEAL: 2, NORMALIZE: 15, QUENCH: 150, CRITICAL_MARTENSITE: 50, CRITICAL_BAINITE: 10 },
+  RATES: { ANNEAL: 2, NORMALIZE: 15, QUENCH: 150, CRITICAL_MARTENSITE: 80, CRITICAL_BAINITE: 35 },
   KM_EQ: { MS_BASE: 561, C_FACTOR: 474, K_BASE: 0.011, BS_BASE: 830, BS_C_FACTOR: 270 },
   CRITICAL_COMPS: [0.022, 0.76, 2.11, 4.30, 6.67]
 };
@@ -42,12 +42,12 @@ const PTS = {
 };
 
 const STEEL_GRADES = [
-  { name: "AISI 1018", c: 0.18, mn: 0.75, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "Low Carbon", desc: "Excellent weldability. Case hardening." },
-  { name: "AISI 1045", c: 0.45, mn: 0.75, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "Medium Carbon", desc: "Good balance of strength & toughness." },
-  { name: "AISI 1095", c: 0.95, mn: 0.40, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "High Carbon", desc: "High hardness. Cutting tools, blades." },
-  { name: "AISI 4140", c: 0.40, mn: 0.85, cr: 0.95, mo: 0.20, v: 0, ni: 0, cu: 0, group: "Cr-Mo Alloy", desc: "High fatigue strength." },
-  { name: "AISI D2", c: 1.50, mn: 0.30, cr: 12.0, mo: 0.80, v: 0.90, ni: 0, cu: 0, group: "Tool Steel", desc: "High wear resistance." },
-  { name: "Gray Iron", c: 3.20, mn: 0.60, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "Cast Iron", desc: "Excellent damping. Engine blocks." }
+  { name: "AISI 1018", c: 0.18, mn: 0.75, si: 0.20, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "Low Carbon", desc: "Excellent weldability. Case hardening." },
+  { name: "AISI 1045", c: 0.45, mn: 0.75, si: 0.20, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "Medium Carbon", desc: "Good balance of strength & toughness." },
+  { name: "AISI 1095", c: 0.95, mn: 0.40, si: 0.20, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "High Carbon", desc: "High hardness. Cutting tools, blades." },
+  { name: "AISI 4140", c: 0.40, mn: 0.85, si: 0.20, cr: 0.95, mo: 0.20, v: 0, ni: 0, cu: 0, group: "Cr-Mo Alloy", desc: "High fatigue strength." },
+  { name: "AISI D2", c: 1.50, mn: 0.30, si: 0.30, cr: 12.0, mo: 0.80, v: 0.90, ni: 0, cu: 0, group: "Tool Steel", desc: "High wear resistance." },
+  { name: "Gray Iron", c: 3.20, mn: 0.60, si: 2.00, cr: 0, mo: 0, v: 0, ni: 0, cu: 0, group: "Cast Iron", desc: "Excellent damping. Engine blocks." }
 ];
 
 // ============================================================================
@@ -61,14 +61,12 @@ const getCarbonEquivalent = (c, mn=0.5, cr=0, mo=0, v=0, ni=0, cu=0) => {
   return c + (mn/6) + ((cr + mo + v)/5) + ((ni + cu)/15);
 };
 
-const getWeldability = (c, isGrade = null) => {
-  let ce = c;
-  if (isGrade) ce = getCarbonEquivalent(isGrade.c, isGrade.mn, isGrade.cr, isGrade.mo, isGrade.v, isGrade.ni, isGrade.cu);
-  else ce = getCarbonEquivalent(c);
+const getWeldability = (alloy) => {
+  let ce = getCarbonEquivalent(alloy.c, alloy.mn, alloy.cr, alloy.mo, alloy.v, alloy.ni, alloy.cu);
 
   if (ce <= 0.35) return { rating: 'Excellent', ce: ce.toFixed(2), desc: 'No pre-heat needed', color: 'text-emerald-500', bg: 'bg-emerald-500/10 border-emerald-500/20' };
   if (ce <= 0.50) return { rating: 'Fair', ce: ce.toFixed(2), desc: 'Pre-heat required (100-200°C)', color: 'text-amber-500', bg: 'bg-amber-500/10 border-amber-500/20' };
-  if (c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) return { rating: 'Poor', ce: ce.toFixed(2), desc: 'High crack risk. Post-weld heat treat.', color: 'text-rose-500', bg: 'bg-rose-500/10 border-rose-500/20' };
+  if (alloy.c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) return { rating: 'Poor', ce: ce.toFixed(2), desc: 'High crack risk. Post-weld heat treat.', color: 'text-rose-500', bg: 'bg-rose-500/10 border-rose-500/20' };
   return { rating: 'Unweldable', ce: ce.toFixed(2), desc: 'Cast Iron structure (brittle)', color: 'text-red-600', bg: 'bg-red-600/10 border-red-600/20' };
 };
 
@@ -101,8 +99,6 @@ const ThermoEngine = {
     if (T >= CONSTANTS.FE_C.T_EUTECTOID) return CONSTANTS.FE_C.C_FERRITE_MAX * ((CONSTANTS.FE_C.T_A3_PURE - T) / (CONSTANTS.FE_C.T_A3_PURE - CONSTANTS.FE_C.T_EUTECTOID));
     return CONSTANTS.FE_C.C_FERRITE_MAX * Math.pow(Math.max(0, T) / CONSTANTS.FE_C.T_EUTECTOID, 3);
   },
-  // FIX: A3 curve exponent corrected from 1.2 → 0.9 to better match published Fe-C diagrams
-  // in the 800–912°C range (NIST / Chipman reference data).
   c_a3: (T) => {
     if (T > CONSTANTS.FE_C.T_A3_PURE) return 0;
     if (T < CONSTANTS.FE_C.T_EUTECTOID) return CONSTANTS.FE_C.C_EUTECTOID;
@@ -193,7 +189,8 @@ const ThermoEngine = {
     return this.leverRule('alpha_Fe3C', 'Ferrite (α)', 'Cementite (Fe₃C)', safeC, c_al, CONSTANTS.FE_C.C_CEMENTITE);
   },
 
-  getState: function(c, T, rate, processMode, maxRateExperienced, lowestTemp) {
+  getState: function(alloy, T, rate, processMode, maxRateExperienced, lowestTemp) {
+    const c = typeof alloy === 'object' ? alloy.c : alloy;
     const safeC = Math.max(0, Math.min(CONSTANTS.FE_C.C_CEMENTITE, c));
     const safeT = Math.max(0, T);
     
@@ -212,7 +209,7 @@ const ThermoEngine = {
 
     // Non-equilibrium Transformations
     if (safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX && safeT <= CONSTANTS.FE_C.T_EUTECTOID) {
-      if (processMode === 'temper' && safeT > 200 && maxRateExperienced >= CONSTANTS.RATES.CRITICAL_MARTENSITE) {
+      if (processMode === 'temper' && maxRateExperienced >= CONSTANTS.RATES.CRITICAL_MARTENSITE) {
         microState.isTempered = true;
         regionId = 'tempered_martensite';
         phaseFractions = [{ name: 'Ferrite (α)', frac: 90, pos: safeC }, { name: 'Cementite (Fe₃C)', frac: 10, pos: safeC }];
@@ -287,11 +284,12 @@ const ThermoEngine = {
       msTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? msTemp : null,
       mfTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? mfTemp : null,
       bsTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? bsTemp : null,
-      ...this.predictProperties(safeC, safeT, phaseFractions, microState, activeRate)
+      ...this.predictProperties(typeof alloy === 'object' ? alloy : {c: safeC, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, cu: 0, v: 0}, safeT, phaseFractions, microState, activeRate)
     };
   },
 
-  predictProperties: function(c, T, phaseFractions, microState, coolingRate) {
+  predictProperties: function(alloy, T, phaseFractions, microState, coolingRate) {
+    let c = alloy.c;
     let fLiq = phaseFractions.find(f => f.name.includes('Liquid'))?.frac / 100 || 0;
     if (fLiq > 0.99) return { micro: 'Uniform Liquid Phase', crystal: 'Amorphous', yield: 0, uts: 0, hardness: { hv: 0, hrc: 0, hb: 0 }, elong: 100, grainSize: 0, fatigue: 0, dbtt: 0, paramA: 0, paramC: 0 };
 
@@ -304,22 +302,20 @@ const ThermoEngine = {
     if (coolingRate > 5) grainSizeASTM += Math.min(4, coolingRate / 10); 
     if (microState.isQuenched) grainSizeASTM = Math.min(14, grainSizeASTM + 4);
 
-    // FIX: Hall-Petch grain diameter calculation corrected.
-    // ASTM grain size G relates to grain diameter d (mm) by: d = (1 / sqrt(2^G * 2000)) * 25.4
-    // Using the standard formula: N_grains_per_in² = 2^(G-1) at 100x magnification.
-    // d_mm = 1 / sqrt(2^G * 7.74) is a common practical approximation giving d_mm in the
-    // physically meaningful range (G=1 → ~0.25mm, G=8 → ~0.022mm, G=14 → ~0.0016mm).
     let d_mm = 1 / Math.sqrt(Math.pow(2, grainSizeASTM) * 7.74);
-    // Hall-Petch: σ_y = σ_0 + k / sqrt(d).  k ≈ 15 MPa·mm^0.5 is a reasonable
-    // composite constant for a mixed Fe microstructure.
     let hallPetchFactor = 15 / Math.sqrt(d_mm);
+
+    const { mn, si, cr, ni, mo, cu, v } = alloy;
+    let sssYield = (32 * mn) + (84 * si) + (38 * cu) + (11 * mo) + (15 * cr);
+    let sssHardness = (10 * mn) + (25 * si) + (12 * cu) + (4 * mo) + (3 * cr);
+    let sssFactor = Math.max(0.2, 1 - fMart * 0.8);
 
     let baseYield = (fGamma * 150) + (fAlpha * 200) + (fDelta * 100) + (fCem * 900) + 
                     (fMart * (1000 + 2000 * c)) + (fBain * (600 + 1000 * c)) + 
-                    (fTemp * (800 + 1200 * c)) + hallPetchFactor;
+                    (fTemp * (800 + 1200 * c)) + hallPetchFactor + (sssYield * sssFactor);
                     
     let baseHardness = (fGamma * 120) + (fAlpha * 90) + (fDelta * 80) + (fCem * 800) + 
-                       (fMart * (300 + 500 * c)) + (fBain * (250 + 300 * c)) + (fTemp * (250 + 200 * c));
+                       (fMart * (300 + 500 * c)) + (fBain * (250 + 300 * c)) + (fTemp * (250 + 200 * c)) + (sssHardness * sssFactor);
                        
     let baseElong = (fGamma * 40) + (fAlpha * 35) + (fDelta * 40) + (fCem * 1) + 
                     (fMart * Math.max(1, 10 - c*10)) + (fBain * 15) + (fTemp * 20);
@@ -332,7 +328,7 @@ const ThermoEngine = {
     let elong = baseElong * (1 + (1 - thermalFactor)); 
     let fatigueLimit = T > 600 ? 0 : Math.min(uts * 0.5, 700);
     
-    let dbtt = -50 + (c * 200) - (grainSizeASTM * 5); 
+    let dbtt = -50 + (c * 200) - (grainSizeASTM * 5) + (mn * -30) + (ni * -25) + (si * 44) + (cr * 10); 
     if (microState.isQuenched) dbtt += 150; 
     if (microState.isBainitic) dbtt -= 20; 
     if (microState.isTempered) dbtt -= 50; 
@@ -379,7 +375,7 @@ const ThermoEngine = {
 // MODULE: EXPORT ENGINE
 // ============================================================================
 const ExportEngine = {
-  generateTXT: (carbon, temp, mode, state, weldStatus) => {
+  generateTXT: (alloy, temp, mode, state, weldStatus) => {
     const timestamp = new Date().toISOString();
     let fracStr = state.phaseFractions.map(f => `- ${f.name}: ${f.frac.toFixed(1)}%`).join('\n');
     let microStr = state.microFractions.map(f => `- ${f.name}: ${f.frac.toFixed(1)}%`).join('\n');
@@ -391,7 +387,8 @@ Version: ${APP_VERSION}
 ====================================================
 COMPOSITION & THERMAL STATE
 ====================================================
-Carbon Content   : ${carbon.toFixed(3)} wt%
+Carbon Content   : ${alloy.c.toFixed(3)} wt%
+Alloying Elements: Mn:${alloy.mn.toFixed(2)}% Si:${alloy.si.toFixed(2)}% Cr:${alloy.cr.toFixed(2)}% Ni:${alloy.ni.toFixed(2)}% Mo:${alloy.mo.toFixed(2)}% V:${alloy.v.toFixed(2)}% Cu:${alloy.cu.toFixed(2)}%
 Temperature      : ${temp.toFixed(1)} °C
 Processing Mode  : ${mode.toUpperCase()}
 Phase Region     : ${state.regionLabel}
@@ -430,13 +427,14 @@ Notes            : ${weldStatus.desc}
 `.trim();
   },
 
-  generateCSV: (carbon, temp, state, snapshots) => {
-    const headers = "Source,Carbon_wt%,Temperature_C,Yield_MPa,UTS_MPa,Hardness_HV,Elongation_%,DBTT_C,Crystal,Microstructure\n";
-    let content = headers + `Current,${carbon.toFixed(3)},${temp.toFixed(1)},${state.yield},${state.uts},${state.hardness.hv},${state.elong},${state.dbtt},${state.crystal},"${state.micro}"\n`;
+  generateCSV: (alloy, temp, state, snapshots) => {
+    const headers = "Source,C_wt%,Mn_wt%,Si_wt%,Cr_wt%,Ni_wt%,Mo_wt%,V_wt%,Cu_wt%,Temperature_C,Yield_MPa,UTS_MPa,Hardness_HV,Elongation_%,DBTT_C,Crystal,Microstructure\n";
+    let content = headers + `Current,${alloy.c.toFixed(3)},${alloy.mn.toFixed(2)},${alloy.si.toFixed(2)},${alloy.cr.toFixed(2)},${alloy.ni.toFixed(2)},${alloy.mo.toFixed(2)},${alloy.v.toFixed(2)},${alloy.cu.toFixed(2)},${temp.toFixed(1)},${state.yield},${state.uts},${state.hardness.hv},${state.elong},${state.dbtt},${state.crystal},"${state.micro}"\n`;
     
     if (snapshots && snapshots.length > 0) {
       snapshots.forEach((s, i) => { 
-        content += `Snapshot_${i+1},${s.c.toFixed(3)},${s.t.toFixed(1)},${s.state.yield},${s.state.uts},${s.state.hv},${s.state.elong},${s.state.dbtt},${s.state.crystal},"${s.state.micro}"\n`; 
+        let a = s.alloy || { c: s.c, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, v: 0, cu: 0 };
+        content += `Snapshot_${i+1},${a.c.toFixed(3)},${a.mn.toFixed(2)},${a.si.toFixed(2)},${a.cr.toFixed(2)},${a.ni.toFixed(2)},${a.mo.toFixed(2)},${a.v.toFixed(2)},${a.cu.toFixed(2)},${s.t.toFixed(1)},${s.state.yield},${s.state.uts},${s.state.hv},${s.state.elong},${s.state.dbtt},${s.state.crystal},"${s.state.micro}"\n`; 
       });
     }
     return content;
@@ -459,55 +457,57 @@ Notes            : ${weldStatus.desc}
 // MODULE: OPTIMIZATION ENGINE (INVERSE DESIGN)
 // ============================================================================
 const OptimizationEngine = {
-  runInverseDesign: function(targetHardness, targetYield, targetElong) {
+  runInverseDesign: function(targets, baseAlloy) {
     let bestResults = [];
     const cSteps = [];
-    for(let c=0.05; c<=1.30; c+=0.05) cSteps.push(c);
+    for(let c=0.02; c<=1.50; c+=0.02) cSteps.push(c);
     
-    // FIX: "Bainitic HT" label clarified; note added that bainite requires isothermal
-    // hold rather than continuous cooling — results for this route are approximate.
     const processes = [
-      { name: 'Annealed', rate: CONSTANTS.RATES.ANNEAL, mode: 'anneal' },
-      { name: 'Normalized', rate: CONSTANTS.RATES.NORMALIZE, mode: 'normalize' },
-      { name: 'Quenched', rate: CONSTANTS.RATES.QUENCH, mode: 'quench' },
-      { name: 'Bainitic HT*', rate: CONSTANTS.RATES.CRITICAL_BAINITE + 5, mode: 'manual' }
+      { name: 'Annealed (Slow Cool)', rate: CONSTANTS.RATES.ANNEAL, mode: 'anneal' },
+      { name: 'Normalized (Air Cool)', rate: CONSTANTS.RATES.NORMALIZE, mode: 'normalize' },
+      { name: 'Quenched (Untempered)', rate: CONSTANTS.RATES.QUENCH, mode: 'quench' },
+      { name: 'Quenched & Tempered', rate: CONSTANTS.RATES.QUENCH, mode: 'temper' },
+      { name: 'Austempered (Bainitic)*', rate: CONSTANTS.RATES.CRITICAL_BAINITE + 5, mode: 'manual' }
     ];
 
     cSteps.forEach(c => {
+      let testAlloy = { ...baseAlloy, c: c };
       processes.forEach(proc => {
-        const state = ThermoEngine.getState(c, 20, 0, proc.mode, proc.rate, 20);
+        const maxRate = proc.mode === 'temper' ? CONSTANTS.RATES.QUENCH : proc.rate;
+        const state = ThermoEngine.getState(testAlloy, 20, 0, proc.mode, maxRate, 20);
         
-        let loss = 0;
-        let weights = 0;
+        let totalLoss = 0; let weightSum = 0;
         
-        if (targetHardness > 0) {
-          loss += (Math.abs(state.hardness.hv - targetHardness) / targetHardness) * 2.0;
-          weights += 2.0;
+        if (targets.hv.val > 0) {
+          const err = (state.hardness.hv - targets.hv.val) / targets.hv.val;
+          totalLoss += Math.pow(err, 2) * targets.hv.weight;
+          weightSum += targets.hv.weight;
         }
-        if (targetYield > 0) {
-          loss += (Math.abs(state.yield - targetYield) / targetYield) * 1.5;
-          weights += 1.5;
+        if (targets.yield.val > 0) {
+          const err = (state.yield - targets.yield.val) / targets.yield.val;
+          totalLoss += Math.pow(err, 2) * targets.yield.weight;
+          weightSum += targets.yield.weight;
         }
-        if (targetElong > 0) {
-          if (state.elong < targetElong) {
-             loss += (Math.abs(state.elong - targetElong) / targetElong) * 1.0;
-          } else {
-             loss += (Math.abs(state.elong - targetElong) / targetElong) * 0.1;
+        if (targets.uts.val > 0) {
+          const err = (state.uts - targets.uts.val) / targets.uts.val;
+          totalLoss += Math.pow(err, 2) * targets.uts.weight;
+          weightSum += targets.uts.weight;
+        }
+        if (targets.elong.val > 0) {
+          let err = 0;
+          if (state.elong < targets.elong.val) {
+             err = (targets.elong.val - state.elong) / targets.elong.val;
+             totalLoss += Math.pow(err, 2) * (targets.elong.weight * 2.0); 
           }
-          weights += 1.0;
+          weightSum += targets.elong.weight;
         }
         
-        if (weights > 0) loss = loss / weights;
+        if (weightSum === 0) return;
         
-        let matchScore = Math.max(0, 100 - (loss * 100));
+        const rmse = Math.sqrt(totalLoss / weightSum);
+        let matchScore = Math.max(0, 100 * Math.exp(-rmse * 4)); 
 
-        bestResults.push({
-           c: c,
-           process: proc.name,
-           state: state,
-           loss: loss,
-           matchScore: matchScore
-        });
+        bestResults.push({ c: c, process: proc.name, state: state, rmse: rmse, matchScore: matchScore });
       });
     });
 
@@ -517,7 +517,7 @@ const OptimizationEngine = {
     let seenConfigGroups = new Set();
     
     for (let res of bestResults) {
-        let configKey = `${Math.round(res.c * 4) / 4}_${res.process}`;
+        let configKey = `${Math.round(res.c * 5) / 5}_${res.process}`;
         if (!seenConfigGroups.has(configKey)) {
             seenConfigGroups.add(configKey);
             distinctResults.push(res);
@@ -539,27 +539,15 @@ const useLocalStorage = (key, initialValue) => {
     try {
       const item = window.localStorage.getItem(key);
       return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.warn(error);
-      return initialValue;
-    }
+    } catch (error) { return initialValue; }
   });
 
   const setValue = (value) => {
     try {
       const valueToStore = value instanceof Function ? value(storedValue) : value;
       setStoredValue(valueToStore);
-      if (typeof window !== "undefined") {
-        // FIX: Guard against localStorage quota exceeded errors
-        try {
-          window.localStorage.setItem(key, JSON.stringify(valueToStore));
-        } catch (storageError) {
-          console.warn('localStorage quota exceeded:', storageError);
-        }
-      }
-    } catch (error) {
-      console.warn(error);
-    }
+      if (typeof window !== "undefined") window.localStorage.setItem(key, JSON.stringify(valueToStore));
+    } catch (error) { console.warn(error); }
   };
   return [storedValue, setValue];
 };
@@ -617,16 +605,12 @@ const useHeatTreatment = (temp, carbon, setTemp) => {
         else simRef.current.phase = 'cooling';
       }
 
-      const rateMagnitude = mode === 'anneal' ? CONSTANTS.RATES.ANNEAL : 
-                            mode === 'normalize' ? CONSTANTS.RATES.NORMALIZE : 
-                            mode === 'quench' ? CONSTANTS.RATES.QUENCH : 100;
-
+      const rateMagnitude = mode === 'anneal' ? CONSTANTS.RATES.ANNEAL : mode === 'normalize' ? CONSTANTS.RATES.NORMALIZE : mode === 'quench' ? CONSTANTS.RATES.QUENCH : 100;
       setHistoryTrail(prev => prev.length === 0 ? [{ c: simRef.current.c, t: simRef.current.t, time: 0 }] : prev);
 
       const animateStep = (time) => {
         const dt = Math.min((time - lastTime) / 1000, 0.1); 
         lastTime = time;
-        simTime += dt;
 
         let { t: currentT, phase } = simRef.current;
         let displayRate = 0;
@@ -635,14 +619,17 @@ const useHeatTreatment = (temp, carbon, setTemp) => {
         if (phase === 'heating_to_austenitize') {
           displayRate = -250;
           currentT += Math.abs(displayRate) * dt * 3;
+          simTime += dt * 3;
           if (currentT >= AUSTENITE_TEMP) { currentT = AUSTENITE_TEMP; simRef.current.phase = 'cooling'; }
         } else if (phase === 'heating') {
           displayRate = -150;
           currentT += Math.abs(displayRate) * dt * 2;
+          simTime += dt * 2;
           if (currentT >= TARGET_TEMPER) { currentT = TARGET_TEMPER; simRef.current.phase = 'holding'; simRef.current.timer = 1.0; }
         } else if (phase === 'holding') {
           displayRate = 0;
           simRef.current.timer -= dt;
+          simTime += dt;
           if (simRef.current.timer <= 0) simRef.current.phase = 'cooling';
         } else if (phase === 'cooling') {
           let actualRate = rateMagnitude;
@@ -652,6 +639,7 @@ const useHeatTreatment = (temp, carbon, setTemp) => {
           displayRate = actualRate;
           let timeMultiplier = mode === 'anneal' ? 40 : mode === 'normalize' ? 20 : mode === 'quench' ? 4 : 20;
           currentT -= actualRate * dt * timeMultiplier;
+          simTime += dt * timeMultiplier;
           if (currentT <= TARGET_COOL) { currentT = TARGET_COOL; isDone = true; }
         }
 
@@ -686,9 +674,6 @@ const useHeatTreatment = (temp, carbon, setTemp) => {
 const useDiagramInteractions = (svgRef, carbon, temp, setCarbon, setTemp, changeMode, maxC, geometry) => {
   const [isDragging, setIsDragging] = useState(false);
 
-  // FIX: Removed unused `carbon` and `temp` from dependency array to prevent
-  // stale closure recreation on every keystroke. coords are derived from the event,
-  // not from component state.
   const getCoords = useCallback((e) => {
     if (!svgRef.current) return { c: 0, t: 20 };
     const rect = svgRef.current.getBoundingClientRect();
@@ -699,18 +684,16 @@ const useDiagramInteractions = (svgRef, carbon, temp, setCarbon, setTemp, change
     let clientY = e.clientY;
     
     if (e.touches && e.touches.length > 0) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
+        clientX = e.touches[0].clientX; clientY = e.touches[0].clientY;
     } else if (e.changedTouches && e.changedTouches.length > 0) {
-        clientX = e.changedTouches[0].clientX;
-        clientY = e.changedTouches[0].clientY;
+        clientX = e.changedTouches[0].clientX; clientY = e.changedTouches[0].clientY;
     }
 
     let c = maxC === 0 ? geometry.m.left : ((clientX - rect.left) * scaleX - geometry.m.left) / geometry.innerW * maxC;
     let t = CONSTANTS.FE_C.T_MAX - ((clientY - rect.top) * scaleY - geometry.m.top) / geometry.innerH * CONSTANTS.FE_C.T_MAX;
     
     return { c: Math.max(0, Math.min(maxC, c)), t: Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, t)) };
-  }, [svgRef, maxC, geometry]);  // FIX: carbon & temp removed — not used in body
+  }, [svgRef, maxC, geometry]); 
 
   const snapToCritical = (c, t) => {
       let snapC = c; let snapT = t;
@@ -721,7 +704,7 @@ const useDiagramInteractions = (svgRef, carbon, temp, setCarbon, setTemp, change
       if (Math.abs(t - CONSTANTS.FE_C.T_EUTECTOID) < 15) snapT = CONSTANTS.FE_C.T_EUTECTOID;
       else if (Math.abs(t - CONSTANTS.FE_C.T_EUTECTIC) < 15) snapT = CONSTANTS.FE_C.T_EUTECTIC;
       else if (c < CONSTANTS.FE_C.C_EUTECTOID) {
-          const dynamicA3Temp = CONSTANTS.FE_C.T_A3_PURE - (CONSTANTS.FE_C.T_A3_PURE - CONSTANTS.FE_C.T_EUTECTOID) * Math.pow(c / CONSTANTS.FE_C.C_EUTECTOID, 1/0.9); // FIX: exponent mirrors corrected c_a3
+          const dynamicA3Temp = CONSTANTS.FE_C.T_A3_PURE - (CONSTANTS.FE_C.T_A3_PURE - CONSTANTS.FE_C.T_EUTECTOID) * Math.pow(c / CONSTANTS.FE_C.C_EUTECTOID, 1/0.9); 
           if (Math.abs(t - dynamicA3Temp) < 15) snapT = dynamicA3Temp;
       } else if (c >= CONSTANTS.FE_C.C_EUTECTOID && c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) {
           const dynamicAcmTemp = CONSTANTS.FE_C.T_EUTECTOID + (CONSTANTS.FE_C.T_EUTECTIC - CONSTANTS.FE_C.T_EUTECTOID) * Math.pow((c - CONSTANTS.FE_C.C_EUTECTOID) / (CONSTANTS.FE_C.C_AUSTENITE_MAX - CONSTANTS.FE_C.C_EUTECTOID), 1/1.4);
@@ -756,7 +739,7 @@ const useDiagramInteractions = (svgRef, carbon, temp, setCarbon, setTemp, change
 
 
 // ============================================================================
-// MODULE: THERMO CONTEXT (SPLIT INTO STATE AND ACTIONS)
+// COMPONENT SECTIONS
 // ============================================================================
 const ThermoStateContext = createContext();
 const ThermoActionContext = createContext();
@@ -769,17 +752,22 @@ const ThermoProvider = ({ children }) => {
   const initialC = parseNum(urlParams.get('c'), 0.40);
   const initialT = parseNum(urlParams.get('t'), CONSTANTS.FE_C.T_MAX);
 
-  const [carbon, setCarbon] = useState(initialC.toString());
+  const [alloy, setAlloy] = useState({ c: initialC, mn: 0.50, si: 0.20, cr: 0.0, ni: 0.0, mo: 0.0, v: 0.0, cu: 0.0 });
+  const carbon = alloy.c.toString();
+  const setCarbon = useCallback((val) => {
+      setAlloy(prev => ({...prev, c: parseNum(typeof val === 'function' ? val(prev.c) : val, 0)}));
+  }, []);
+
   const [temp, setTemp] = useState(initialT.toString());
   const [phaseFlash, setPhaseFlash] = useState(false);
   const [isPending, startTransition] = useTransition();
   const svgRef = useRef(null);
   
-  // Persistent Settings
   const [isDark, setIsDark] = useLocalStorage('abajis_isDark', false);
   const [snapshots, setSnapshots] = useLocalStorage('abajis_snapshots', []); 
   const [etchant, setEtchant] = useLocalStorage('abajis_etchant', 'nital');
   const [zoomSteel, setZoomSteel] = useState(false);
+  const [showWeldability, setShowWeldability] = useLocalStorage('abajis_weld_overlay', false);
   
   const prevTempRef = useRef(initialT);
   const lowestTempRef = useRef(initialT);
@@ -808,10 +796,10 @@ const ThermoProvider = ({ children }) => {
     }
   }, [currentT, effectiveLowestTemp]);
 
-  const activeGrade = useMemo(() => STEEL_GRADES.find(g => Math.abs(g.c - parseNum(carbon)) < 0.01), [carbon]);
-  const weldStatus = useMemo(() => getWeldability(parseNum(carbon, 0), activeGrade), [carbon, activeGrade]);
+  const activeGrade = useMemo(() => STEEL_GRADES.find(g => Math.abs(g.c - alloy.c) < 0.01 && Math.abs(g.mn - alloy.mn) < 0.1 && Math.abs(g.cr - alloy.cr) < 0.1), [alloy]);
+  const weldStatus = useMemo(() => getWeldability(alloy), [alloy, activeGrade]);
   
-  const simState = useMemo(() => ThermoEngine.getState(parseNum(carbon, 0), currentT, coolingRate, mode, maxRate, effectiveLowestTemp), [carbon, currentT, coolingRate, mode, maxRate, effectiveLowestTemp]);
+  const simState = useMemo(() => ThermoEngine.getState(alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp), [alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp]);
   
   const maxC = zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE;
   const geometry = useMemo(() => {
@@ -833,13 +821,18 @@ const ThermoProvider = ({ children }) => {
     diagramBgClass: isDark ? 'bg-[#020617]' : 'bg-white' 
   }), [isDark]);
 
+  const handleAlloyChange = useCallback((elem, val) => {
+    changeMode('manual');
+    setAlloy(prev => ({...prev, [elem]: parseNum(val, 0)}));
+  }, [changeMode]);
+
   const stateValue = useMemo(() => ({
-    carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending
-  }), [carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending]);
+    alloy, carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending
+  }), [alloy, carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending]);
 
   const actionValue = useMemo(() => ({
-    setCarbon, setTemp, isDark, setIsDark, zoomSteel, setZoomSteel, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, startTransition
-  }), [isDark, zoomSteel, snapshots, etchant, mode, changeMode, maxC, geometry, theme, svgRef]);
+    alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, startTransition
+  }), [alloy, isDark, zoomSteel, showWeldability, snapshots, etchant, mode, changeMode, maxC, geometry, theme, svgRef]);
 
   return (
     <ThermoStateContext.Provider value={stateValue}>
@@ -925,6 +918,59 @@ class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
+
+const WeldabilityOverlay = React.memo(() => {
+  const { alloy } = useThermoState();
+  const { geometry, maxC, isDark, showWeldability } = useThermoAction();
+  
+  if (!showWeldability) return null;
+
+  // Calculate generic base shift factor due to non-carbon alloying elements
+  const K = (alloy.mn / 6) + ((alloy.cr + alloy.mo + alloy.v) / 5) + ((alloy.ni + alloy.cu) / 15);
+  
+  // Back-calculate the Carbon thresholds that correspond to standard CE breakpoints
+  const cExc = 0.35 - K;
+  const cFair = 0.50 - K;
+
+  const { mapX, m, innerH } = geometry;
+
+  // Clamp mapping bounds safely within chart boundaries
+  const x0 = mapX(0);
+  const xMax = mapX(maxC);
+  const xExcClamped = mapX(Math.max(0, Math.min(maxC, cExc)));
+  const xFairClamped = mapX(Math.max(0, Math.min(maxC, cFair)));
+
+  return (
+    <g className="weldability-overlay">
+      {/* Background Iso-Regions */}
+      <g opacity={isDark ? "0.15" : "0.1"}>
+        {cExc > 0 && (
+          <rect x={x0} y={m.top} width={xExcClamped - x0} height={innerH} fill="#10b981" style={{ transition: 'all 0.3s ease-out' }} />
+        )}
+        {cFair > 0 && cExc < maxC && (
+          <rect x={xExcClamped} y={m.top} width={Math.max(0, xFairClamped - xExcClamped)} height={innerH} fill="#f59e0b" style={{ transition: 'all 0.3s ease-out' }} />
+        )}
+        {cFair < maxC && (
+          <rect x={xFairClamped} y={m.top} width={xMax - xFairClamped} height={innerH} fill="#ef4444" style={{ transition: 'all 0.3s ease-out' }} />
+        )}
+      </g>
+
+      {/* Threshold Contour Lines & Labels */}
+      {cExc > 0 && cExc <= maxC && (
+        <g opacity="0.8" style={{ transition: 'all 0.3s ease-out' }} transform={`translate(${mapX(cExc)}, 0)`}>
+          <line x1={0} y1={m.top} x2={0} y2={geometry.h - m.bottom} stroke="#10b981" strokeWidth="2.5" strokeDasharray="4,4" />
+          <text x={0} y={m.top + 15} fill="#10b981" fontSize="10" fontWeight="bold" transform={`rotate(-90 0 ${m.top + 15})`} dy="-6">CE = 0.35 (Exc.)</text>
+        </g>
+      )}
+      {cFair > 0 && cFair <= maxC && (
+        <g opacity="0.8" style={{ transition: 'all 0.3s ease-out' }} transform={`translate(${mapX(cFair)}, 0)`}>
+          <line x1={0} y1={m.top} x2={0} y2={geometry.h - m.bottom} stroke="#f59e0b" strokeWidth="2.5" strokeDasharray="4,4" />
+          <text x={0} y={m.top + 15} fill="#f59e0b" fontSize="10" fontWeight="bold" transform={`rotate(-90 0 ${m.top + 15})`} dy="-6">CE = 0.50 (Fair)</text>
+        </g>
+      )}
+    </g>
+  );
+});
 
 const DiagramSkeleton = React.memo(() => {
   const { geometry, maxC, isDark, zoomSteel } = useThermoAction();
@@ -1306,12 +1352,6 @@ const PropertyGauge = React.memo(({ label, value, unit, max, colorClass }) => {
   );
 });
 
-// ============================================================================
-// FIX: Added missing CoolingCurvePlot component.
-// Previously referenced in TelemetrySection but never defined, causing a
-// ReferenceError that crashed the entire Telemetry panel.
-// This component renders a live temperature-vs-time cooling curve chart.
-// ============================================================================
 const CoolingCurvePlot = React.memo(() => {
   const { historyTrail, temp } = useThermoState();
   const { isDark, theme } = useThermoAction();
@@ -1323,10 +1363,8 @@ const CoolingCurvePlot = React.memo(() => {
 
   const currentT = parseNum(temp, 20);
 
-  // Derive the displayable portion of history (cooling phase only — descending T)
   const trail = useMemo(() => {
     if (!historyTrail || historyTrail.length < 2) return [];
-    // Find where cooling started (first descending run)
     let startIdx = 0;
     for (let i = 1; i < historyTrail.length; i++) {
       if (historyTrail[i].t < historyTrail[i - 1].t) { startIdx = i - 1; break; }
@@ -1357,7 +1395,6 @@ const CoolingCurvePlot = React.memo(() => {
   const axisColor = isDark ? '#475569' : '#94a3b8';
   const gridColor = isDark ? '#1e293b' : '#f1f5f9';
 
-  // Critical temperature reference lines visible in current T range
   const criticalLines = [
     { t: CONSTANTS.FE_C.T_EUTECTOID, label: 'A₁', color: '#f43f5e' },
     { t: CONSTANTS.FE_C.T_A3_PURE, label: 'A₃', color: '#f97316' },
@@ -1380,70 +1417,38 @@ const CoolingCurvePlot = React.memo(() => {
         <LineChart size={12} /> Cooling Curve (T vs Time)
       </div>
       <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="block">
-        {/* Grid */}
         <g stroke={gridColor} strokeWidth="1">
-          {[0.25, 0.5, 0.75].map(f => (
-            <line key={`gx-${f}`} x1={m.left + f * innerW} y1={m.top} x2={m.left + f * innerW} y2={h - m.bottom} />
-          ))}
-          {[0.33, 0.67].map(f => (
-            <line key={`gy-${f}`} x1={m.left} y1={m.top + f * innerH} x2={w - m.right} y2={m.top + f * innerH} />
-          ))}
+          {[0.25, 0.5, 0.75].map(f => <line key={`gx-${f}`} x1={m.left + f * innerW} y1={m.top} x2={m.left + f * innerW} y2={h - m.bottom} />)}
+          {[0.33, 0.67].map(f => <line key={`gy-${f}`} x1={m.left} y1={m.top + f * innerH} x2={w - m.right} y2={m.top + f * innerH} />)}
         </g>
-
-        {/* Critical temperature reference lines */}
         {criticalLines.map(l => (
           <g key={`cl-${l.t}`}>
-            <line x1={m.left} y1={mapY(l.t)} x2={w - m.right} y2={mapY(l.t)}
-              stroke={l.color} strokeWidth="1.5" strokeDasharray="4,3" opacity="0.6" />
+            <line x1={m.left} y1={mapY(l.t)} x2={w - m.right} y2={mapY(l.t)} stroke={l.color} strokeWidth="1.5" strokeDasharray="4,3" opacity="0.6" />
             <text x={w - m.right + 2} y={mapY(l.t) + 3} fontSize="8" fontWeight="bold" fill={l.color} opacity="0.8">{l.label}</text>
           </g>
         ))}
-
-        {/* Cooling curve glow */}
         {pathStr && (
           <>
-            <path d={pathStr} fill="none" stroke="#ef4444" strokeWidth="5" strokeOpacity="0.15"
-              style={{ filter: 'blur(3px)' }} strokeLinecap="round" strokeLinejoin="round" />
-            <path d={pathStr} fill="none" stroke="#ef4444" strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round" />
+            <path d={pathStr} fill="none" stroke="#ef4444" strokeWidth="5" strokeOpacity="0.15" style={{ filter: 'blur(3px)' }} strokeLinecap="round" strokeLinejoin="round" />
+            <path d={pathStr} fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </>
         )}
-
-        {/* Current position dot */}
         {trail.length > 0 && (
-          <circle
-            cx={mapX(trail[trail.length - 1].time)}
-            cy={mapY(currentT)}
-            r="4" fill="#ef4444" stroke={isDark ? '#0f172a' : '#fff'} strokeWidth="2"
-          />
+          <circle cx={mapX(trail[trail.length - 1].time)} cy={mapY(currentT)} r="4" fill="#ef4444" stroke={isDark ? '#0f172a' : '#fff'} strokeWidth="2" />
         )}
-
-        {/* Axes */}
-        <path d={`M ${m.left} ${m.top} L ${m.left} ${h - m.bottom} L ${w - m.right} ${h - m.bottom}`}
-          fill="none" stroke={axisColor} strokeWidth="1.5" />
-
-        {/* Y-axis ticks */}
+        <path d={`M ${m.left} ${m.top} L ${m.left} ${h - m.bottom} L ${w - m.right} ${h - m.bottom}`} fill="none" stroke={axisColor} strokeWidth="1.5" />
         {[minT, (minT + maxT) / 2, maxT].map((t, i) => (
           <g key={`ty-${i}`} transform={`translate(${m.left}, ${mapY(t)})`}>
             <line x2="-4" stroke={axisColor} strokeWidth="1" />
-            <text x="-6" y="3" textAnchor="end" fontSize="8"
-              fill={isDark ? '#94a3b8' : '#64748b'}>{Math.round(t)}</text>
+            <text x="-6" y="3" textAnchor="end" fontSize="8" fill={isDark ? '#94a3b8' : '#64748b'}>{Math.round(t)}</text>
           </g>
         ))}
-
-        {/* Axis labels */}
-        <text x={m.left + innerW / 2} y={h - 4} textAnchor="middle" fontSize="8" fontWeight="bold"
-          fill={isDark ? '#64748b' : '#94a3b8'} letterSpacing="1">TIME (s)</text>
-        <text transform={`rotate(-90) translate(${-(m.top + innerH / 2)}, 12)`} textAnchor="middle"
-          fontSize="8" fontWeight="bold" fill={isDark ? '#64748b' : '#94a3b8'} letterSpacing="1">°C</text>
+        <text x={m.left + innerW / 2} y={h - 4} textAnchor="middle" fontSize="8" fontWeight="bold" fill={isDark ? '#64748b' : '#94a3b8'} letterSpacing="1">TIME (s)</text>
+        <text transform={`rotate(-90) translate(${-(m.top + innerH / 2)}, 12)`} textAnchor="middle" fontSize="8" fontWeight="bold" fill={isDark ? '#64748b' : '#94a3b8'} letterSpacing="1">°C</text>
       </svg>
     </div>
   );
 });
-
-// ============================================================================
-// COMPONENT SECTIONS
-// ============================================================================
 
 const TopNav = () => {
   const { carbon, temp, isPending } = useThermoState();
@@ -1454,10 +1459,6 @@ const TopNav = () => {
     const url = `${window.location.origin}${window.location.pathname}?c=${parseNum(carbon, 0).toFixed(3)}&t=${parseNum(temp, 0).toFixed(0)}`;
     if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).then(triggerCopiedLink).catch(e => console.error(e)); }
   }, [carbon, temp, triggerCopiedLink]);
-
-  const toggleZoom = useCallback(() => { 
-    setZoomSteel(prev => !prev); 
-  }, [setZoomSteel]);
 
   return (
     <nav className={cn("sticky top-0 z-50 px-4 md:px-8 py-3.5 border-b shadow-[0_4px_30px_rgba(0,0,0,0.05)] flex flex-wrap justify-between items-center gap-4", theme.border, theme.panelBg)}>
@@ -1481,7 +1482,7 @@ const TopNav = () => {
         <button onClick={shareState} className={cn("flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-all shadow-sm focus-visible:outline-none", copiedLink ? 'bg-emerald-500 border-emerald-500 text-white' : (isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-200' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'))}>
           <Share2 size={16}/> <span className="hidden sm:inline">{copiedLink ? 'Copied!' : 'Share'}</span>
         </button>
-        <button onClick={toggleZoom} className={cn("flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-all shadow-sm focus-visible:outline-none", zoomSteel ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700' : (isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-200' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'))}>
+        <button onClick={() => setZoomSteel(!zoomSteel)} className={cn("flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-all shadow-sm focus-visible:outline-none", zoomSteel ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700' : (isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-200' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'))}>
           <Search size={16}/> <span className="hidden sm:inline">{zoomSteel ? 'Full Map' : 'Steel View'}</span>
         </button>
         <button onClick={() => setIsDark(!isDark)} className={cn("p-2.5 rounded-xl border transition-all shadow-sm focus-visible:outline-none", isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-amber-400' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600')}>
@@ -1494,30 +1495,31 @@ const TopNav = () => {
 
 const ControlsSection = () => {
   const { carbon, temp, mode, maxRate } = useThermoState();
-  const { setCarbon, setTemp, changeMode, zoomSteel, setZoomSteel, theme, isDark, maxC } = useThermoAction();
+  const { alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, changeMode, zoomSteel, setZoomSteel, theme, isDark, maxC } = useThermoAction();
+
+  const [showAlloys, setShowAlloys] = useState(false);
 
   const stepCarbon = (dir) => { changeMode('manual'); setCarbon(prev => Number(Math.max(0, Math.min(zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE, parseNum(prev, 0) + dir * 0.01)).toFixed(3)).toString()); };
   const stepTemp = (dir) => { changeMode('manual'); setTemp(prev => Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, parseNum(prev, 0) + dir * 5)).toString()); };
   const handleCarbonChange = (e) => { changeMode('manual'); const val = e.target.value; setCarbon(val); if (!isNaN(parseFloat(val)) && parseFloat(val) > 2.5 && zoomSteel) setZoomSteel(false); };
   const handleTempChange = (e) => { changeMode('manual'); setTemp(e.target.value); };
-  const resetToRoom = () => { changeMode('manual'); setTemp("20"); };
 
   return (
     <section className={cn("backdrop-blur-xl border rounded-2xl p-6 shadow-xl shrink-0", theme.border, isDark ? 'bg-slate-900/50' : 'bg-white/80')}>
       <div className="flex flex-col gap-4 mb-6 pb-5 border-b border-slate-200 dark:border-slate-800/80">
         <span className={cn("text-xs font-black uppercase tracking-widest flex items-center gap-1.5", theme.textMuted)}>
-          <Database size={14} /> Materials Library (IIW Weldability Embedded)
+          <Database size={14} /> Materials Library
           <TooltipHelp text="Grades contain specific CE equivalents. Shift+Click on diagram to snap to critical eutectic/eutectoid compositions." />
         </span>
         <div className="flex flex-wrap gap-2">
           {STEEL_GRADES.map((grade) => (
             <button 
               key={grade.name}
-              onClick={() => { setCarbon(grade.c.toString()); changeMode('manual'); if (grade.c > 2.5 && zoomSteel) setZoomSteel(false); }}
+              onClick={() => { setAlloy({ c: grade.c, mn: grade.mn, si: grade.si || 0.2, cr: grade.cr, mo: grade.mo, v: grade.v, ni: grade.ni, cu: grade.cu }); changeMode('manual'); if (grade.c > 2.5 && zoomSteel) setZoomSteel(false); }}
               title={grade.desc}
-              className={cn("px-3 py-2 rounded-lg text-xs font-bold transition-all border flex flex-col items-start gap-1 focus-visible:outline-none", Math.abs(parseNum(carbon, 0) - grade.c) < 0.01 ? 'bg-indigo-100 border-indigo-300 dark:bg-indigo-500/20 dark:border-indigo-500/50 shadow-inner' : 'bg-slate-50 border-slate-200 hover:bg-slate-100 dark:bg-slate-800/80 dark:border-slate-700 dark:hover:bg-slate-700')}
+              className={cn("px-3 py-2 rounded-lg text-xs font-bold transition-all border flex flex-col items-start gap-1 focus-visible:outline-none", Math.abs(parseNum(carbon, 0) - grade.c) < 0.01 && Math.abs(alloy.cr - grade.cr) < 0.1 ? 'bg-indigo-100 border-indigo-300 dark:bg-indigo-500/20 dark:border-indigo-500/50 shadow-inner' : 'bg-slate-50 border-slate-200 hover:bg-slate-100 dark:bg-slate-800/80 dark:border-slate-700 dark:hover:bg-slate-700')}
             >
-              <span className={Math.abs(parseNum(carbon, 0) - grade.c) < 0.01 ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-300'}>{grade.name}</span>
+              <span className={Math.abs(parseNum(carbon, 0) - grade.c) < 0.01 && Math.abs(alloy.cr - grade.cr) < 0.1 ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-300'}>{grade.name}</span>
               <span className="text-[9px] uppercase tracking-wider opacity-60 font-medium">{grade.group}</span>
             </button>
           ))}
@@ -1529,11 +1531,6 @@ const ControlsSection = () => {
           <div className="flex justify-between items-end">
             <label className="text-xs font-bold tracking-widest uppercase text-indigo-600 dark:text-indigo-400">Carbon (wt%)</label>
             <div className="flex items-center gap-2">
-              <div className="flex flex-wrap gap-1">
-                {CONSTANTS.CRITICAL_COMPS.filter(c => c <= maxC).map(c => (
-                  <button key={c} onClick={() => { changeMode('manual'); setCarbon(c.toString()); }} className={cn("w-2 h-4 rounded hover:scale-125 transition-transform", Math.abs(parseNum(carbon)-c)<0.01 ? 'bg-indigo-500' : 'bg-indigo-200 dark:bg-indigo-900')} title={`Snap to ${c}%`} />
-                ))}
-              </div>
               <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm ml-2">
                 <button onClick={() => stepCarbon(-1)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500"><Minus size={14} /></button>
                 <input type="number" step="0.01" min="0" max="6.67" value={carbon} onChange={handleCarbonChange} className={cn("w-16 text-center py-1 bg-transparent font-mono text-sm font-black focus:outline-none", theme.textMain)} />
@@ -1542,13 +1539,18 @@ const ControlsSection = () => {
             </div>
           </div>
           <input type="range" min="0" max={zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE} step="0.001" value={parseNum(carbon, 0)} onChange={handleCarbonChange} className="w-full accent-indigo-500 h-2.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer" />
+          
+          <button onClick={() => setShowAlloys(!showAlloys)} className="text-[10px] font-bold text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 flex items-center gap-1 mt-1 transition-colors focus-visible:outline-none">
+            <Settings size={12} /> {showAlloys ? 'Hide Alloying Elements' : 'Advanced Alloying (Mn, Si, Cr, Ni...)'}
+            {showAlloys ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
         </div>
 
         <div className="flex-1 w-full space-y-3">
           <div className="flex justify-between items-end">
             <label className="text-xs font-bold tracking-widest uppercase text-rose-500 dark:text-rose-400">Temperature (°C)</label>
             <div className="flex items-center gap-2">
-              <button onClick={resetToRoom} className="text-[9px] font-bold uppercase tracking-wider text-rose-500 bg-rose-50 dark:bg-rose-500/10 px-2 py-1 rounded hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-colors">Room T</button>
+              <button onClick={() => { changeMode('manual'); setTemp("20"); }} className="text-[9px] font-bold uppercase tracking-wider text-rose-500 bg-rose-50 dark:bg-rose-500/10 px-2 py-1 rounded hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-colors">Room T</button>
               <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
                 <button onClick={() => stepTemp(-1)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500"><Minus size={14} /></button>
                 <input type="number" step="1" min="0" max="1600" value={temp} onChange={handleTempChange} className={cn("w-16 text-center py-1 bg-transparent font-mono text-sm font-black focus:outline-none", theme.textMain)} />
@@ -1559,6 +1561,27 @@ const ControlsSection = () => {
           <input type="range" min="0" max={CONSTANTS.FE_C.T_MAX} step="1" value={parseNum(temp, 0)} onChange={handleTempChange} className="w-full accent-rose-500 h-2.5 bg-slate-200 dark:bg-slate-700 rounded-full appearance-none cursor-pointer" />
         </div>
       </div>
+
+      {showAlloys && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4 mt-6 p-4 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 animate-in slide-in-from-top-2 fade-in">
+           {['mn', 'si', 'cr', 'ni', 'mo', 'v', 'cu'].map(elem => (
+               <div key={elem} className="flex flex-col gap-1.5">
+                   <div className="flex justify-between items-center">
+                     <label className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400">{elem} (wt%)</label>
+                     <input type="number" step="0.01" min="0" max="15" value={alloy[elem]} onChange={(e) => handleAlloyChange(elem, e.target.value)} className={cn("w-12 px-1 py-0.5 rounded text-[10px] font-mono font-bold border focus:outline-none focus:ring-1 focus:ring-indigo-500 text-right bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-600", theme.textMain)} />
+                   </div>
+                   <input type="range" step="0.01" min="0" max={elem==='cr'||elem==='ni'?15:elem==='mn'?5:2} value={alloy[elem]} onChange={(e) => handleAlloyChange(elem, e.target.value)} className="w-full accent-indigo-400 h-1.5 bg-slate-200 dark:bg-slate-600 rounded-full appearance-none cursor-pointer" />
+               </div>
+           ))}
+           <div className="col-span-full mt-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-xl flex items-start gap-3">
+              <Shield size={16} className="text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
+              <div>
+                 <h4 className="text-[11px] font-black uppercase tracking-widest text-indigo-800 dark:text-indigo-300 mb-0.5">Alloy Space Navigator</h4>
+                 <p className="text-[10px] text-indigo-700 dark:text-indigo-400/80 font-medium leading-relaxed">Adjusting elements dynamically shifts the iso-weldability contours (Carbon Equivalent boundaries) across the phase diagram. Enable the <span className="font-bold border-b border-indigo-400/50 pb-0.5">Weldability Map</span> overlay in the Diagram view below to visualize this in real-time.</p>
+              </div>
+           </div>
+        </div>
+      )}
 
       <div className="mt-8 pt-5 border-t border-slate-200 dark:border-slate-700/80 flex flex-col md:flex-row gap-4 items-center">
           <div className={cn("text-[9px] font-bold uppercase tracking-widest flex items-center gap-1", theme.textMuted)}>
@@ -1582,46 +1605,64 @@ const ControlsSection = () => {
   );
 };
 
+const TargetInput = React.memo(({ label, targetKey, placeholder, targets, setTargets, isDark }) => (
+  <div className={cn("flex flex-col gap-1.5 p-3 rounded-xl border transition-colors", isDark ? 'bg-slate-800/40 border-slate-700' : 'bg-slate-50/50 border-slate-200')}>
+     <div className="flex justify-between items-center mb-1">
+       <label className={cn("text-[9px] font-bold uppercase tracking-widest", isDark ? 'text-slate-400' : 'text-slate-500')}>{label}</label>
+       <select 
+         value={targets[targetKey].weight} 
+         onChange={(e) => setTargets(prev => ({...prev, [targetKey]: {...prev[targetKey], weight: parseFloat(e.target.value)}}))}
+         className="text-[9px] font-bold uppercase bg-transparent text-indigo-500 dark:text-indigo-400 focus:outline-none cursor-pointer"
+       >
+         <option value="0.5">Low Priority</option>
+         <option value="1">Normal Priority</option>
+         <option value="2">High Priority</option>
+       </select>
+     </div>
+     <input 
+       type="number" placeholder={placeholder} 
+       value={targets[targetKey].val} 
+       onChange={(e) => setTargets(prev => ({...prev, [targetKey]: {...prev[targetKey], val: e.target.value}}))} 
+       className={cn("w-full px-3 py-2 rounded-lg text-sm font-mono font-bold border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all", isDark ? 'bg-slate-900/80 border-slate-700 text-slate-100 placeholder-slate-600' : 'bg-white border-slate-200 text-slate-800 placeholder-slate-300')} 
+     />
+  </div>
+));
+
 const InverseDesignSection = () => {
+  const { alloy } = useThermoState();
   const { setCarbon, setTemp, changeMode, theme, isDark } = useThermoAction();
   
-  const [targets, setTargets] = useState({ hv: '', yield: '', elong: '' });
+  const [targets, setTargets] = useState({ 
+    hv: { val: '', weight: 1 }, yield: { val: '', weight: 1 }, 
+    uts: { val: '', weight: 1 }, elong: { val: '', weight: 1 } 
+  });
   const [results, setResults] = useState([]);
   const [isOptimizing, setIsOptimizing] = useState(false);
 
   const handleOptimize = () => {
     setIsOptimizing(true);
     setResults([]);
-    
     setTimeout(() => {
-      const hv = parseFloat(targets.hv) || 0;
-      const yld = parseFloat(targets.yield) || 0;
-      const el = parseFloat(targets.elong) || 0;
-      
-      if (hv === 0 && yld === 0 && el === 0) {
-        setIsOptimizing(false);
-        return;
-      }
-
-      const rawResults = OptimizationEngine.runInverseDesign(hv, yld, el);
-      setResults(rawResults);
-      setIsOptimizing(false);
+      const parsedTargets = {
+        hv: { val: parseFloat(targets.hv.val) || 0, weight: targets.hv.weight },
+        yield: { val: parseFloat(targets.yield.val) || 0, weight: targets.yield.weight },
+        uts: { val: parseFloat(targets.uts.val) || 0, weight: targets.uts.weight },
+        elong: { val: parseFloat(targets.elong.val) || 0, weight: targets.elong.weight }
+      };
+      if (parsedTargets.hv.val === 0 && parsedTargets.yield.val === 0 && parsedTargets.uts.val === 0 && parsedTargets.elong.val === 0) { setIsOptimizing(false); return; }
+      const rawResults = OptimizationEngine.runInverseDesign(parsedTargets, alloy);
+      setResults(rawResults); setIsOptimizing(false);
     }, 400);
   };
 
   const applyResult = (res) => {
-    changeMode('manual', false);
-    setCarbon(res.c.toFixed(3));
-    setTemp("900"); 
-
+    changeMode('manual', false); setCarbon(res.c.toFixed(3)); setTemp("900"); 
     setTimeout(() => {
-        if (res.process === 'Annealed') changeMode('anneal');
-        else if (res.process === 'Normalized') changeMode('normalize');
-        else if (res.process === 'Quenched') changeMode('quench');
-        else {
-           setTemp("20");
-           changeMode('manual');
-        }
+        if (res.process.includes('Annealed')) changeMode('anneal');
+        else if (res.process.includes('Normalized')) changeMode('normalize');
+        else if (res.process.includes('Tempered')) changeMode('temper');
+        else if (res.process.includes('Quenched')) changeMode('quench');
+        else { setTemp("20"); changeMode('manual'); }
     }, 500);
   };
 
@@ -1630,183 +1671,57 @@ const InverseDesignSection = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 pb-4 border-b border-slate-200 dark:border-slate-800/80">
         <div>
           <h2 className="text-sm font-black tracking-widest uppercase flex items-center gap-2 bg-clip-text text-transparent bg-gradient-to-r from-emerald-500 to-indigo-500">
-            <Wand2 size={16} className="text-emerald-500" /> Inverse Design Engine
+            <Wand2 size={16} className="text-emerald-500" /> Multi-Objective Inverse Design Engine
           </h2>
-          {/* FIX: Clarified "AI solver" framing — correctly describes the grid search algorithm */}
-          <p className={cn("text-[10px] mt-1.5 font-medium max-w-lg leading-relaxed", theme.textMuted)}>
-            Define target mechanical requirements. The parametric grid-search solver iterates through the composition and processing space to recommend optimal configurations. Results are approximate estimates based on empirical models.
-          </p>
         </div>
-        <button 
-          onClick={handleOptimize} 
-          disabled={isOptimizing}
-          className={cn("px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-md flex items-center gap-2", isOptimizing ? 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-800 dark:text-slate-600' : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-95')}
-        >
-          {isOptimizing ? <><Loader2 size={14} className="animate-spin" /> Solving...</> : <><Search size={14} /> Run Search Algorithm</>}
+        <button onClick={handleOptimize} disabled={isOptimizing} className={cn("px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-md flex items-center gap-2", isOptimizing ? 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-800 dark:text-slate-600' : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-95')}>
+          {isOptimizing ? <><Loader2 size={14} className="animate-spin" /> Solving...</> : <><Search size={14} /> Run Solver</>}
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="flex flex-col gap-1.5">
-           <label className={cn("text-[9px] font-bold uppercase tracking-widest pl-1", isDark ? 'text-slate-400' : 'text-slate-500')}>Target Hardness (HV)</label>
-           <input type="number" placeholder="e.g. 450" value={targets.hv} onChange={(e) => setTargets({...targets, hv: e.target.value})} className={cn("px-4 py-2.5 rounded-xl text-sm font-mono font-bold border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all", isDark ? 'bg-slate-800/50 border-slate-700 text-slate-100 placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-800 placeholder-slate-300')} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-           <label className={cn("text-[9px] font-bold uppercase tracking-widest pl-1", isDark ? 'text-slate-400' : 'text-slate-500')}>Target Yield Str. (MPa)</label>
-           <input type="number" placeholder="e.g. 850" value={targets.yield} onChange={(e) => setTargets({...targets, yield: e.target.value})} className={cn("px-4 py-2.5 rounded-xl text-sm font-mono font-bold border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all", isDark ? 'bg-slate-800/50 border-slate-700 text-slate-100 placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-800 placeholder-slate-300')} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-           <label className={cn("text-[9px] font-bold uppercase tracking-widest pl-1", isDark ? 'text-slate-400' : 'text-slate-500')}>Min. Elongation (%)</label>
-           <input type="number" placeholder="e.g. 15" value={targets.elong} onChange={(e) => setTargets({...targets, elong: e.target.value})} className={cn("px-4 py-2.5 rounded-xl text-sm font-mono font-bold border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all", isDark ? 'bg-slate-800/50 border-slate-700 text-slate-100 placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-800 placeholder-slate-300')} />
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <TargetInput label="Target Hardness (HV)" targetKey="hv" placeholder="e.g. 450" targets={targets} setTargets={setTargets} isDark={isDark} />
+        <TargetInput label="Target Yield Str. (MPa)" targetKey="yield" placeholder="e.g. 850" targets={targets} setTargets={setTargets} isDark={isDark} />
+        <TargetInput label="Target Ult. Str. (MPa)" targetKey="uts" placeholder="e.g. 1000" targets={targets} setTargets={setTargets} isDark={isDark} />
+        <TargetInput label="Min. Elongation (%)" targetKey="elong" placeholder="e.g. 15" targets={targets} setTargets={setTargets} isDark={isDark} />
       </div>
 
       {results.length > 0 && (
         <div className="mt-6 pt-5 border-t border-slate-200 dark:border-slate-800/80 animate-in fade-in slide-in-from-bottom-2">
-          <span className={cn("text-[10px] font-bold uppercase tracking-widest mb-3 block", theme.textMuted)}>Top Processing Recommendations</span>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {results.map((res, i) => (
               <div key={i} className={cn("p-4 rounded-xl border flex flex-col justify-between transition-all hover:shadow-lg", isDark ? 'bg-slate-800/40 border-slate-700' : 'bg-white border-slate-200')}>
                 <div>
                   <div className="flex justify-between items-start mb-2">
-                    <span className={cn("text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-wider", res.matchScore > 90 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : res.matchScore > 75 ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20')}>
+                    <span className={cn("text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-wider", res.matchScore > 85 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : res.matchScore > 60 ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20')}>
                       {res.matchScore.toFixed(1)}% Match
                     </span>
                     <span className={cn("text-[9px] uppercase tracking-widest font-bold opacity-60")}>Option {i+1}</span>
                   </div>
-                  
                   <div className="my-4 space-y-1">
-                    <div className="flex justify-between items-center text-sm">
-                      <span className={cn("font-medium text-[11px]", theme.textMuted)}>Carbon Req:</span>
-                      <span className="font-mono font-black">{res.c.toFixed(2)}% C</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                      <span className={cn("font-medium text-[11px]", theme.textMuted)}>Process Route:</span>
-                      <span className="font-black text-[11px] uppercase tracking-wider text-indigo-500 dark:text-indigo-400">{res.process}</span>
-                    </div>
+                    <div className="flex justify-between items-center text-sm"><span className={cn("font-medium text-[11px]", theme.textMuted)}>Carbon Req:</span><span className="font-mono font-black">{res.c.toFixed(2)}% C</span></div>
+                    <div className="flex justify-between items-center text-sm"><span className={cn("font-medium text-[11px]", theme.textMuted)}>Process Route:</span><span className="font-black text-[11px] uppercase tracking-wider text-indigo-500 dark:text-indigo-400">{res.process}</span></div>
                   </div>
-
-                  <div className={cn("p-2 rounded-lg border text-[10px] font-mono grid grid-cols-3 gap-2 text-center", isDark ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-50 border-slate-200')}>
-                    <div><div className="opacity-50 font-sans mb-0.5">HV</div><div className="font-bold">{res.state.hardness.hv}</div></div>
-                    <div className="border-x dark:border-slate-800 border-slate-200"><div className="opacity-50 font-sans mb-0.5">Yield</div><div className="font-bold">{res.state.yield}</div></div>
-                    <div><div className="opacity-50 font-sans mb-0.5">Elong</div><div className="font-bold">{res.state.elong}%</div></div>
+                  <div className={cn("p-2 rounded-lg border text-[10px] font-mono grid grid-cols-4 gap-1.5 text-center", isDark ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-50 border-slate-200')}>
+                    <div><div className="opacity-50 font-sans mb-0.5 text-[8px]">HV</div><div className="font-bold text-[10px]">{res.state.hardness.hv}</div></div>
+                    <div className="border-x dark:border-slate-800 border-slate-200"><div className="opacity-50 font-sans mb-0.5 text-[8px]">Yield</div><div className="font-bold text-[10px]">{res.state.yield}</div></div>
+                    <div className="border-r dark:border-slate-800 border-slate-200"><div className="opacity-50 font-sans mb-0.5 text-[8px]">UTS</div><div className="font-bold text-[10px]">{res.state.uts}</div></div>
+                    <div><div className="opacity-50 font-sans mb-0.5 text-[8px]">Elong</div><div className="font-bold text-[10px]">{res.state.elong}%</div></div>
                   </div>
                 </div>
-                
-                <button 
-                  onClick={() => applyResult(res)}
-                  className={cn("w-full mt-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all", isDark ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-700')}
-                >
-                  Simulate Configuration
-                </button>
+                <button onClick={() => applyResult(res)} className={cn("w-full mt-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all", isDark ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-700')}>Simulate Configuration</button>
               </div>
             ))}
           </div>
-          {/* FIX: Added asterisk note for Bainitic HT to flag approximate nature */}
-          {results.some(r => r.process.includes('Bainitic')) && (
-            <p className={cn("text-[9px] mt-3 opacity-60 italic", theme.textMuted)}>
-              * Bainitic HT results are approximate. True bainite formation requires an isothermal hold in the bainitic bay (typically 250–550°C), which is not simulated by continuous cooling alone.
-            </p>
-          )}
         </div>
       )}
     </section>
   );
 };
 
-
-const WeldabilityNavigator = React.memo(() => {
-  // Use activeGrade instead of alloy since your provider tracks carbon + activeGrade
-  const { activeGrade } = useThermoState();
-  const { geometry, maxC, isDark, zoomSteel } = useThermoAction();
-  const { mapX, m, h, innerH } = geometry;
-
- // Calculate the non-carbon CE penalty based on the active grade (if one is selected)
-  let cePenalty = 0;
-  if (activeGrade) {
-    cePenalty = (activeGrade.mn / 6) + ((activeGrade.cr + activeGrade.mo + activeGrade.v) / 5) + ((activeGrade.ni + activeGrade.cu) / 15);
-  } else {
-    // Apply the standard 0.5% Mn default penalty so the visual matches the Telemetry panel
-    cePenalty = 0.5 / 6; 
-  }
-  
-  // Calculate shifting critical carbon thresholds
-  const cExcellent = Math.max(0, 0.35 - cePenalty);
-  const cFair = Math.max(0, 0.50 - cePenalty);
-  
-  // If the view is zoomed in (Steel View), restrict the max drawing boundary
-  const displayMaxC = zoomSteel ? 2.5 : CONSTANTS.FE_C.C_AUSTENITE_MAX;
-
-  // Map thresholds to SVG X-coordinates
-  const xStart = mapX(0);
-  const xExcellent = mapX(Math.min(displayMaxC, cExcellent));
-  const xFair = mapX(Math.min(displayMaxC, cFair));
-  const xMax = mapX(displayMaxC);
-
-  // If penalty > 0.50, everything is unweldable (zones collapse to 0)
-  const showExcellent = cExcellent > 0;
-  const showFair = cFair > 0 && xFair > xExcellent;
-
-  return (
-    <g className="weldability-overlay pointer-events-none transition-all duration-500">
-      <defs>
-        <linearGradient id="grad-excellent" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#10b981" stopOpacity={isDark ? "0.15" : "0.1"} />
-          <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
-        </linearGradient>
-        <linearGradient id="grad-fair" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#f59e0b" stopOpacity={isDark ? "0.15" : "0.1"} />
-          <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
-        </linearGradient>
-        <linearGradient id="grad-poor" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#f43f5e" stopOpacity={isDark ? "0.15" : "0.1"} />
-          <stop offset="100%" stopColor="#f43f5e" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-
-      <clipPath id="weldability-clip">
-        <rect x={m.left} y={m.top} width={geometry.innerW} height={innerH} />
-      </clipPath>
-
-      <g clipPath="url(#weldability-clip)">
-        {showExcellent && (
-          <rect x={xStart} y={m.top} width={xExcellent - xStart} height={innerH} fill="url(#grad-excellent)" />
-        )}
-        
-        {showFair && (
-          <rect x={xExcellent} y={m.top} width={xFair - xExcellent} height={innerH} fill="url(#grad-fair)" />
-        )}
-
-        {xFair < xMax && (
-          <rect x={xFair} y={m.top} width={xMax - xFair} height={innerH} fill="url(#grad-poor)" />
-        )}
-
-        {showExcellent && (
-          <g>
-            <line x1={xExcellent} y1={m.top} x2={xExcellent} y2={h - m.bottom} stroke="#10b981" strokeWidth="2" strokeDasharray="6,4" opacity="0.6" />
-            <text x={xExcellent - 5} y={m.top + 20} transform={`rotate(-90 ${xExcellent - 5} ${m.top + 20})`} className="text-[10px] font-black uppercase tracking-widest fill-emerald-500 opacity-80" textAnchor="end">
-              CE 0.35 Limit
-            </text>
-          </g>
-        )}
-
-        {showFair && (
-          <g>
-            <line x1={xFair} y1={m.top} x2={xFair} y2={h - m.bottom} stroke="#f59e0b" strokeWidth="2" strokeDasharray="6,4" opacity="0.6" />
-            <text x={xFair - 5} y={m.top + 20} transform={`rotate(-90 ${xFair - 5} ${m.top + 20})`} className="text-[10px] font-black uppercase tracking-widest fill-amber-500 opacity-80" textAnchor="end">
-              CE 0.50 Limit
-            </text>
-          </g>
-        )}
-      </g>
-    </g>
-  );
-});
-
-
 const DiagramSection = () => {
   const { carbon, temp, historyTrail, simState } = useThermoState();
-  const { svgRef, setCarbon, setTemp, changeMode, maxC, geometry, theme, isDark } = useThermoAction();
+  const { svgRef, setCarbon, setTemp, changeMode, maxC, geometry, theme, isDark, showWeldability, setShowWeldability } = useThermoAction();
   const { isDragging, onPointerDown, onPointerMove, onPointerUp } = useDiagramInteractions(svgRef, carbon, temp, setCarbon, setTemp, changeMode, maxC, geometry);
 
   const historyPointsStr = useMemo(() => {
@@ -1835,11 +1750,16 @@ const DiagramSection = () => {
          <MousePointerClick size={12} /> Drag to adjust. <span className="opacity-50 mx-1">|</span> Shift + Drag to snap. <span className="opacity-50 mx-1">|</span> Arrow keys to nudge.
        </div>
 
+       <button
+         onClick={() => setShowWeldability(!showWeldability)}
+         className={cn("absolute top-5 right-5 z-20 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg transition-all flex items-center gap-1.5 border backdrop-blur-md focus-visible:outline-none", showWeldability ? 'bg-indigo-600/90 text-white border-indigo-500' : isDark ? 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50')}
+       >
+         <Shield size={14} className={showWeldability ? 'text-emerald-400' : ''} /> {showWeldability ? 'Hide Weldability Map' : 'Show Weldability Map'}
+       </button>
+
        <svg ref={svgRef} width="100%" viewBox={`0 0 ${geometry.w} ${geometry.h}`} style={{ touchAction: 'none' }} className={cn("w-full h-full font-sans select-none overflow-hidden block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500", theme.diagramBgClass, isDragging ? 'cursor-grabbing' : 'cursor-crosshair')} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onKeyDown={handleSVGKeyDown} tabIndex="0" role="application" aria-label="Interactive Iron-Carbon Phase Diagram">
+          <WeldabilityOverlay />
           <DiagramSkeleton />
-          
-          {/* CORRECT PLACEMENT: Inject the novel weldability space navigator here */}
-          <WeldabilityNavigator /> 
           
           <g className="pointer-events-none">
             {historyPointsStr && (
@@ -1877,14 +1797,14 @@ const KineticsDiagramSection = () => {
   const c = parseNum(carbon, 0);
   const currentT = parseNum(temp, 20);
 
+  const [hoverData, setHoverData] = useState(null);
+  const svgRef = useRef(null);
+
   const w = 850, h = 400;
   const m = { top: 40, right: 60, bottom: 60, left: 70 };
   const innerW = w - m.left - m.right;
   const innerH = h - m.top - m.bottom;
-
-  const minLog = -1;
-  const maxLog = 5;
-  const maxTemp = 900;
+  const minLog = -1; const maxLog = 5; const maxTemp = 900;
 
   const mapX = useCallback((time) => {
     const logT = Math.log10(Math.max(0.1, time));
@@ -1895,51 +1815,72 @@ const KineticsDiagramSection = () => {
 
   const curves = useMemo(() => {
     const cShift = Math.pow(Math.abs(c - 0.76), 1.2) * 1.5;
-    let ps = '', pf = '', bs = '', bf = '';
     const msTemp = simState.msTemp || 200;
+    const pStartPts = []; const pFinishPts = [];
+    const bStartPts = []; const bFinishPts = [];
 
-    for (let t = 720; t >= Math.max(20, msTemp); t -= 10) {
-      if (t >= 500) {
-        const pLog = 0.5 + cShift + Math.pow((t - 600) / 60, 2) * 0.8;
-        const xS = mapX(Math.pow(10, pLog));
-        const xF = mapX(Math.pow(10, pLog + 1.5));
-        const y = mapY(t);
-        ps += ps === '' ? `M ${xS},${y}` : ` L ${xS},${y}`;
-        pf += pf === '' ? `M ${xF},${y}` : ` L ${xF},${y}`;
+    for (let t = 720; t >= Math.max(20, msTemp); t -= 2) {
+      if (t >= 480) {
+        const pLogStart = 0.3 + cShift + Math.pow(Math.abs(t - 600) / 50, 2.2) * 0.6;
+        const pLogFinish = pLogStart + 1.3 + Math.pow(Math.abs(t - 600) / 90, 2) * 0.4;
+        pStartPts.push({ x: mapX(Math.pow(10, pLogStart)), y: mapY(t) });
+        pFinishPts.push({ x: mapX(Math.pow(10, pLogFinish)), y: mapY(t) });
       }
-      if (t <= 550) {
-        const bLog = 1.0 + cShift + Math.pow((t - 400) / 70, 2) * 1.0;
-        const xS = mapX(Math.pow(10, bLog));
-        const xF = mapX(Math.pow(10, bLog + 1.5));
-        const y = mapY(t);
-        bs += bs === '' ? `M ${xS},${y}` : ` L ${xS},${y}`;
-        bf += bf === '' ? `M ${xF},${y}` : ` L ${xF},${y}`;
+      if (t <= 520 && t >= msTemp) {
+        const bLogStart = 0.9 + cShift + Math.pow(Math.abs(t - 400) / 60, 2) * 0.8;
+        const bLogFinish = bLogStart + 1.6 + Math.pow(Math.abs(t - 400) / 80, 2) * 0.5;
+        bStartPts.push({ x: mapX(Math.pow(10, bLogStart)), y: mapY(t) });
+        bFinishPts.push({ x: mapX(Math.pow(10, bLogFinish)), y: mapY(t) });
       }
     }
-    return { ps, pf, bs, bf, msTemp };
+
+    const makePath = (pts) => pts.length ? `M ${pts.map(p => `${p.x},${p.y}`).join(' L ')}` : '';
+    const makeFill = (starts, finishes) => {
+      if (!starts.length || !finishes.length) return '';
+      return `M ${starts[0].x},${starts[0].y} ` + starts.slice(1).map(p => `L ${p.x},${p.y}`).join(' ') + ' ' + finishes.slice().reverse().map(p => `L ${p.x},${p.y}`).join(' ') + ' Z';
+    };
+
+    return { 
+      ps: makePath(pStartPts), pf: makePath(pFinishPts), pFill: makeFill(pStartPts, pFinishPts),
+      bs: makePath(bStartPts), bf: makePath(bFinishPts), bFill: makeFill(bStartPts, bFinishPts), msTemp 
+    };
   }, [c, mapX, mapY, simState.msTemp]);
 
   const coolingPath = useMemo(() => {
     if (!historyTrail || historyTrail.length < 2) return '';
-    
     let startTime = historyTrail[0].time;
-    for(let i = 1; i < historyTrail.length; i++) {
-        if(historyTrail[i].t < historyTrail[i-1].t && historyTrail[i-1].t > 700) {
-            startTime = historyTrail[i-1].time;
-            break;
-        }
-    }
-
+    for(let i = 1; i < historyTrail.length; i++) { if(historyTrail[i].t < historyTrail[i-1].t && historyTrail[i-1].t > 700) { startTime = historyTrail[i-1].time; break; } }
     let path = '';
     historyTrail.forEach((p) => {
       const relTime = Math.max(0.1, p.time - startTime);
       if (p.t > maxTemp) return; 
-      const x = mapX(relTime);
-      const y = mapY(p.t);
+      const x = mapX(relTime); const y = mapY(p.t);
       path += path === '' ? `M ${x},${y}` : ` L ${x},${y}`;
     });
     return path;
   }, [historyTrail, mapX, mapY, maxTemp]);
+
+  const handlePointerMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    let clientX = e.clientX; let clientY = e.clientY;
+    if (e.touches && e.touches.length > 0) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; }
+    
+    const x = ((clientX - rect.left) / rect.width) * w; const y = ((clientY - rect.top) / rect.height) * h;
+    
+    if (x >= m.left && x <= w - m.right && y >= m.top && y <= h - m.bottom) {
+      const logT = minLog + ((x - m.left) / innerW) * (maxLog - minLog);
+      const hoverTemp = maxTemp * (1 - (y - m.top) / innerH);
+      setHoverData({ x, y, time: Math.pow(10, logT), temp: hoverTemp });
+    } else { setHoverData(null); }
+  };
+
+  const formatTime = (sec) => {
+    if (sec < 1) return sec.toFixed(2) + 's';
+    if (sec < 60) return sec.toFixed(1) + 's';
+    if (sec < 3600) return `${Math.floor(sec/60)}m ${(sec%60).toFixed(0)}s`;
+    return `${Math.floor(sec/3600)}h ${Math.floor((sec%3600)/60)}m`;
+  };
 
   const axisColor = isDark ? '#475569' : '#94a3b8';
   const gridColor = isDark ? '#0f172a' : '#f8fafc';
@@ -1951,14 +1892,14 @@ const KineticsDiagramSection = () => {
           <h2 className="text-sm font-black tracking-widest uppercase flex items-center gap-2 bg-clip-text text-transparent bg-gradient-to-r from-orange-500 to-rose-500">
             <LineChart size={16} className="text-orange-500" /> Isothermal Transformation (TTT) Kinetics
           </h2>
-          <p className={cn("text-[10px] mt-1.5 font-medium max-w-lg leading-relaxed", theme.textMuted)}>
-            Visualizes empirical Time-Temperature-Transformation curves based on current alloy composition ({c.toFixed(2)}% C). The dynamic red line plots real-time thermal history onto the logarithmic temporal scale.
-          </p>
         </div>
       </div>
 
-      <div className="w-full overflow-x-auto relative custom-scrollbar">
-         <svg width="100%" viewBox={`0 0 ${w} ${h}`} className={cn("w-full min-w-[600px] h-auto rounded-xl", theme.diagramBgClass)}>
+      <div className="w-full overflow-x-auto relative custom-scrollbar group">
+         <svg ref={svgRef} width="100%" viewBox={`0 0 ${w} ${h}`} 
+              onPointerMove={handlePointerMove} onPointerLeave={() => setHoverData(null)}
+              className={cn("w-full min-w-[600px] h-auto rounded-xl touch-none cursor-crosshair", theme.diagramBgClass)}>
+            
             <g stroke={gridColor} strokeWidth="1.5">
                {[0,1,2,3,4,5].map(log => <line key={`gx-${log}`} x1={mapX(Math.pow(10, log))} y1={m.top} x2={mapX(Math.pow(10, log))} y2={h-m.bottom} />)}
                {[200,400,600,800].map(t => <line key={`gy-${t}`} x1={m.left} y1={mapY(t)} x2={w-m.right} y2={mapY(t)} />)}
@@ -1968,7 +1909,6 @@ const KineticsDiagramSection = () => {
                 <g opacity="0.8">
                     <line x1={m.left} y1={mapY(curves.msTemp)} x2={w-m.right} y2={mapY(curves.msTemp)} stroke="#a855f7" strokeWidth="2" strokeDasharray="4,4" />
                     <text x={w-m.right + 5} y={mapY(curves.msTemp) + 3} className="text-[10px] font-bold fill-purple-500">Ms</text>
-                    
                     <line x1={m.left} y1={mapY(Math.max(20, curves.msTemp - 215))} x2={w-m.right} y2={mapY(Math.max(20, curves.msTemp - 215))} stroke="#a855f7" strokeWidth="1.5" strokeDasharray="2,4" />
                     <text x={w-m.right + 5} y={mapY(Math.max(20, curves.msTemp - 215)) + 3} className="text-[9px] font-bold fill-purple-400">Mf</text>
                 </g>
@@ -1977,50 +1917,65 @@ const KineticsDiagramSection = () => {
             <line x1={m.left} y1={mapY(727)} x2={w-m.right} y2={mapY(727)} stroke="#f43f5e" strokeWidth="2" strokeDasharray="4,4" opacity="0.5"/>
             <text x={m.left + 10} y={mapY(727) - 5} className="text-[10px] font-bold fill-rose-500 opacity-70">A1 (727°C)</text>
 
-            <g fill="none" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d={curves.pFill} fill="#3b82f6" opacity={isDark ? "0.15" : "0.1"} />
+            <path d={curves.bFill} fill="#10b981" opacity={isDark ? "0.15" : "0.1"} />
+
+            <g fill="none" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d={curves.ps} stroke="#3b82f6" />
-                <path d={curves.pf} stroke="#3b82f6" strokeDasharray="6,4" opacity="0.6" />
-                
+                <path d={curves.pf} stroke="#3b82f6" strokeDasharray="6,4" opacity="0.8" />
                 <path d={curves.bs} stroke="#10b981" />
-                <path d={curves.bf} stroke="#10b981" strokeDasharray="6,4" opacity="0.6" />
+                <path d={curves.bf} stroke="#10b981" strokeDasharray="6,4" opacity="0.8" />
             </g>
 
-            <text x={mapX(100)} y={mapY(650)} className="text-[16px] font-black fill-blue-500 opacity-20" textAnchor="middle">PEARLITE</text>
-            <text x={mapX(100)} y={mapY(350)} className="text-[16px] font-black fill-emerald-500 opacity-20" textAnchor="middle">BAINITE</text>
-            <text x={mapX(1)} y={mapY(800)} className="text-[12px] font-black fill-slate-500 opacity-40">AUSTENITE (Unstable)</text>
+            <text x={mapX(100)} y={mapY(630)} className="text-[16px] font-black fill-blue-500 opacity-30 pointer-events-none" textAnchor="middle">PEARLITE</text>
+            <text x={mapX(100)} y={mapY(330)} className="text-[16px] font-black fill-emerald-500 opacity-30 pointer-events-none" textAnchor="middle">BAINITE</text>
+            <text x={mapX(1)} y={mapY(800)} className="text-[12px] font-black fill-slate-500 opacity-50 pointer-events-none">AUSTENITE (Unstable)</text>
             
             {curves.msTemp > 20 && (
-               <text x={mapX(1)} y={mapY(Math.max(20, curves.msTemp - 100))} className="text-[14px] font-black fill-purple-500 opacity-20">MARTENSITE</text>
+               <text x={mapX(1)} y={mapY(Math.max(20, curves.msTemp - 100))} className="text-[14px] font-black fill-purple-500 opacity-30 pointer-events-none">MARTENSITE</text>
             )}
 
             {coolingPath && (
                 <>
-                    <path d={coolingPath} fill="none" stroke="#ef4444" strokeWidth="6" strokeOpacity="0.2" style={{ filter: 'blur(3px)' }} />
-                    <path d={coolingPath} fill="none" stroke="#ef4444" strokeWidth="2.5" />
+                    <path d={coolingPath} fill="none" stroke="#ef4444" strokeWidth="6" strokeOpacity="0.2" style={{ filter: 'blur(3px)' }} className="pointer-events-none" />
+                    <path d={coolingPath} fill="none" stroke="#ef4444" strokeWidth="2.5" className="pointer-events-none" />
                 </>
             )}
+            <circle cx={coolingPath ? mapX(Math.max(0.1, historyTrail[historyTrail.length-1]?.time || 0.1)) : mapX(0.1)} cy={mapY(currentT)} r="5" fill="#ef4444" stroke={isDark ? '#0f172a' : '#fff'} strokeWidth="2" className="shadow-lg pointer-events-none" />
 
-            <circle cx={coolingPath ? mapX(Math.max(0.1, historyTrail[historyTrail.length-1]?.time || 0.1)) : mapX(0.1)} cy={mapY(currentT)} r="5" fill="#ef4444" stroke={isDark ? '#0f172a' : '#fff'} strokeWidth="2" className="shadow-lg" />
-
-            <path d={`M ${m.left} ${m.top} L ${m.left} ${h - m.bottom} L ${w - m.right} ${h - m.bottom}`} fill="none" stroke={axisColor} strokeWidth="2.5" />
+            <path d={`M ${m.left} ${m.top} L ${m.left} ${h - m.bottom} L ${w - m.right} ${h - m.bottom}`} fill="none" stroke={axisColor} strokeWidth="2.5" className="pointer-events-none" />
             
             {[ -1, 0, 1, 2, 3, 4, 5 ].map(log => (
-                <g key={`tx-${log}`} transform={`translate(${mapX(Math.pow(10, log))}, ${h - m.bottom})`}>
+                <g key={`tx-${log}`} transform={`translate(${mapX(Math.pow(10, log))}, ${h - m.bottom})`} className="pointer-events-none">
                     <line y2="6" stroke={axisColor} strokeWidth="2" />
                     <text y="20" textAnchor="middle" className={cn("text-[10px] font-mono font-bold", isDark ? 'fill-slate-400' : 'fill-slate-500')}>
                         {log === -1 ? '0.1' : Math.pow(10, log)}
                     </text>
                 </g>
             ))}
-            <text x={m.left + innerW/2} y={h - 15} textAnchor="middle" className="text-[10px] font-black uppercase tracking-widest fill-indigo-500">Time (Seconds - Log Scale)</text>
+            <text x={m.left + innerW/2} y={h - 15} textAnchor="middle" className="text-[10px] font-black uppercase tracking-widest fill-indigo-500 pointer-events-none">Time (Seconds - Log Scale)</text>
 
             {[0, 200, 400, 600, 800].map(t => (
-                <g key={`ty-${t}`} transform={`translate(${m.left}, ${mapY(t)})`}>
+                <g key={`ty-${t}`} transform={`translate(${m.left}, ${mapY(t)})`} className="pointer-events-none">
                     <line x2="-6" stroke={axisColor} strokeWidth="2" />
                     <text x="-12" y="4" textAnchor="end" className={cn("text-[10px] font-mono font-bold", isDark ? 'fill-slate-400' : 'fill-slate-500')}>{t}</text>
                 </g>
             ))}
-            <text transform={`rotate(-90) translate(${-m.top - innerH/2}, ${m.left - 45})`} textAnchor="middle" className="text-[10px] font-black uppercase tracking-widest fill-rose-500">Temperature (°C)</text>
+            <text transform={`rotate(-90) translate(${-m.top - innerH/2}, ${m.left - 45})`} textAnchor="middle" className="text-[10px] font-black uppercase tracking-widest fill-rose-500 pointer-events-none">Temperature (°C)</text>
+
+            {hoverData && (
+              <g className="pointer-events-none">
+                <line x1={hoverData.x} y1={m.top} x2={hoverData.x} y2={h - m.bottom} stroke={isDark ? '#cbd5e1' : '#334155'} strokeWidth="1" strokeDasharray="4,4" opacity="0.5" />
+                <line x1={m.left} y1={hoverData.y} x2={w - m.right} y2={hoverData.y} stroke={isDark ? '#cbd5e1' : '#334155'} strokeWidth="1" strokeDasharray="4,4" opacity="0.5" />
+                <circle cx={hoverData.x} cy={hoverData.y} r="4" fill="none" stroke={isDark ? '#fff' : '#000'} strokeWidth="1.5" />
+                
+                <g transform={`translate(${Math.min(hoverData.x + 10, w - 120)}, ${Math.max(hoverData.y - 45, m.top + 10)})`}>
+                  <rect width="100" height="38" rx="6" fill={isDark ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.95)'} stroke={isDark ? '#334155' : '#cbd5e1'} className="shadow-lg backdrop-blur-md" />
+                  <text x="50" y="16" textAnchor="middle" className={cn("text-[11px] font-black font-mono", isDark ? 'fill-rose-400' : 'fill-rose-600')}>{hoverData.temp.toFixed(0)} °C</text>
+                  <text x="50" y="30" textAnchor="middle" className={cn("text-[10px] font-bold font-mono", isDark ? 'fill-slate-300' : 'fill-slate-600')}>{formatTime(hoverData.time)}</text>
+                </g>
+              </g>
+            )}
          </svg>
       </div>
     </section>
@@ -2028,20 +1983,19 @@ const KineticsDiagramSection = () => {
 };
 
 const SnapshotSection = () => {
-  const { snapshots, setSnapshots, changeMode, setCarbon, setTemp, theme, isDark } = useThermoAction();
+  const { snapshots, setSnapshots, changeMode, setAlloy, setTemp, theme, isDark } = useThermoAction();
   
   const restoreSnapshot = useCallback((s) => {
     changeMode('manual');
-    setCarbon(s.c.toString());
+    setAlloy(s.alloy || { c: s.c, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, v: 0, cu: 0 });
     setTemp(s.t.toString());
-  }, [changeMode, setCarbon, setTemp]);
+  }, [changeMode, setAlloy, setTemp]);
 
   return (
     <section className={cn("backdrop-blur-xl border rounded-2xl p-6 shadow-xl shrink-0", theme.border, isDark ? 'bg-slate-900/50' : 'bg-white/80')}>
       <div className="flex justify-between items-center mb-4">
         <h3 className={cn("text-xs font-black uppercase tracking-widest flex items-center gap-2", theme.textMuted)}>
           <Activity size={14}/> Batch Snapshots ({snapshots.length})
-          <TooltipHelp text="Click a row to restore its precise thermal state." />
         </h3>
         <button onClick={() => setSnapshots([])} className="text-red-500 hover:text-red-600 flex items-center gap-1 text-[10px] uppercase font-bold tracking-widest transition-colors"><Trash2 size={12}/> Clear All</button>
       </div>
@@ -2059,7 +2013,7 @@ const SnapshotSection = () => {
           <tbody>
             {snapshots.map((s) => (
               <tr key={s.id} onClick={() => restoreSnapshot(s)} className={cn("border-b last:border-0 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors cursor-pointer group", isDark ? 'border-slate-800' : 'border-slate-100')}>
-                <td className="p-3 font-mono text-xs font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{s.c.toFixed(2)}%C @ {s.t.toFixed(0)}°C</td>
+                <td className="p-3 font-mono text-xs font-black text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{(s.alloy?.c || s.c).toFixed(2)}%C @ {s.t.toFixed(0)}°C</td>
                 <td className="p-3 text-[10px] font-bold uppercase tracking-wider">{s.mode}</td>
                 <td className="p-3 font-mono text-xs font-bold opacity-80">{s.state.hardness.hv} HV</td>
                 <td className="p-3 text-[10px] font-semibold opacity-80 truncate max-w-[150px]" title={s.state.micro}>{s.state.crystal} • {s.state.micro}</td>
@@ -2074,14 +2028,14 @@ const SnapshotSection = () => {
 };
 
 const TelemetrySection = () => {
-  const { carbon, temp, simState, mode, weldStatus } = useThermoState();
+  const { alloy, carbon, temp, simState, mode, weldStatus } = useThermoState();
   const { snapshots, setSnapshots, etchant, setEtchant, theme, isDark, svgRef } = useThermoAction();
   const [captureMsg, triggerCapture] = useEphemeralMessage(3000);
 
   const takeSnapshot = useCallback(() => { 
-    setSnapshots(prev => [...prev.slice(-19), { id: Date.now(), c: parseNum(carbon, 0), t: parseNum(temp, 0), mode: mode, state: { ...simState } }]); 
+    setSnapshots(prev => [...prev.slice(-19), { id: Date.now(), alloy: { ...alloy }, c: parseNum(carbon, 0), t: parseNum(temp, 0), mode: mode, state: { ...simState } }]); 
     triggerCapture(); 
-  }, [carbon, temp, mode, simState, setSnapshots, triggerCapture]);
+  }, [alloy, carbon, temp, mode, simState, setSnapshots, triggerCapture]);
 
   const downloadSVG = useCallback(() => {
     if (!svgRef.current) return;
@@ -2094,12 +2048,12 @@ const TelemetrySection = () => {
   }, [svgRef, isDark, carbon]);
 
   const downloadCSV = useCallback(() => {
-    ExportEngine.downloadBlob(ExportEngine.generateCSV(parseNum(carbon), parseNum(temp), simState, snapshots), 'text/csv', `ABAJIS_Data_${parseNum(carbon).toFixed(2)}C.csv`);
-  }, [carbon, temp, simState, snapshots]);
+    ExportEngine.downloadBlob(ExportEngine.generateCSV(alloy, parseNum(temp), simState, snapshots), 'text/csv', `ABAJIS_Data_${parseNum(carbon).toFixed(2)}C.csv`);
+  }, [alloy, carbon, temp, simState, snapshots]);
 
   const downloadTXT = useCallback(() => {
-    ExportEngine.downloadBlob(ExportEngine.generateTXT(parseNum(carbon), parseNum(temp), mode, simState, weldStatus), 'text/plain', `ABAJIS_Report_${parseNum(carbon).toFixed(2)}C_${mode}.txt`);
-  }, [carbon, temp, mode, simState, weldStatus]);
+    ExportEngine.downloadBlob(ExportEngine.generateTXT(alloy, parseNum(temp), mode, simState, weldStatus), 'text/plain', `ABAJIS_Report_${parseNum(carbon).toFixed(2)}C_${mode}.txt`);
+  }, [alloy, carbon, temp, mode, simState, weldStatus]);
 
   return (
     <section className={cn("backdrop-blur-xl border rounded-2xl shadow-xl flex flex-col xl:h-full overflow-hidden relative", theme.border, isDark ? 'bg-slate-900/50' : 'bg-white/80')}>
@@ -2121,7 +2075,6 @@ const TelemetrySection = () => {
       </div>
 
       <div className="p-5 flex flex-col gap-6 flex-1 overflow-y-auto custom-scrollbar">
-        {/* FIX: CoolingCurvePlot now defined above — renders live T vs time chart */}
         <CoolingCurvePlot />
         
         <div className={cn("p-4 rounded-xl border flex items-center justify-between shadow-sm transition-colors duration-300", weldStatus.bg)}>
@@ -2210,7 +2163,6 @@ const TelemetrySection = () => {
         <div className="flex flex-col">
            <h3 className={cn("text-[11px] uppercase font-black tracking-widest mb-4 flex items-center gap-2", theme.textMuted)}>
              <Target size={14}/> Mechanics at Temp
-             <TooltipHelp text="Yield derived via Hall-Petch relation (σ=σ₀+k/√d). S-N endurance approx. Includes continuous thermal softening factor." />
            </h3>
            <div className="grid grid-cols-2 gap-3 mb-3">
               <PropertyGauge label="Yield" value={simState.yield} unit="MPa" max={2500} colorClass="bg-blue-500" />
@@ -2285,8 +2237,6 @@ const MainLayout = () => {
       <TopNav />
 
       <main className="flex-1 p-4 md:p-6 max-w-[1800px] w-full mx-auto grid grid-cols-1 xl:grid-cols-12 gap-6 overflow-y-auto xl:overflow-hidden relative">
-        
-        {/* LEFT COLUMN */}
         <div className="xl:col-span-8 flex flex-col gap-6 xl:overflow-y-auto custom-scrollbar xl:pr-2 xl:h-[calc(100vh-100px)] xl:pb-20">
           <ControlsSection />
           <InverseDesignSection />
@@ -2295,7 +2245,6 @@ const MainLayout = () => {
           {snapshots.length > 0 && <SnapshotSection />}
         </div>
 
-        {/* RIGHT COLUMN (TELEMETRY) */}
         <div className="xl:col-span-4 flex flex-col gap-6 xl:h-[calc(100vh-100px)]">
           <TelemetrySection />
           <CreatorSection />
