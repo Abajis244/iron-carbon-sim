@@ -1156,16 +1156,24 @@ const TooltipHelp = ({ text }) => (
 );
 
 class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { hasError: false }; }
-  static getDerivedStateFromError(error) { return { hasError: true }; }
-  componentDidCatch(error, errorInfo) { console.error("Simulation error:", error, errorInfo); }
+  constructor(props) { 
+    super(props); 
+    this.state = { hasError: false, errorMessage: '' }; 
+  }
+  static getDerivedStateFromError(error) { 
+    return { hasError: true, errorMessage: error.message }; 
+  }
+  componentDidCatch(error, errorInfo) { 
+    console.error("Simulation error:", error, errorInfo); 
+  }
   render() {
     if (this.state.hasError) {
       return (
         <div className="p-6 border border-red-500 bg-red-50 text-red-700 rounded-xl flex flex-col items-center justify-center text-center h-screen">
           <AlertTriangle size={48} className="mb-4 text-red-500" />
           <h2 className="text-xl font-bold mb-2">Simulation Rendering Error</h2>
-          <p className="text-sm opacity-80 mb-4">The thermodynamic state encountered an unexpected parameter.</p>
+          <p className="text-sm opacity-80 mb-2">The thermodynamic state encountered an unexpected parameter.</p>
+          <p className="text-xs font-mono opacity-60 mb-4 max-w-md">{this.state.errorMessage}</p>
           <button onClick={() => window.location.reload()} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold">Reload Application</button>
         </div>
       );
@@ -1557,7 +1565,7 @@ const MicrostructureDisplay = React.memo(({ onCapture }) => {
 
     const boundaryColor = isDark ? '#334155' : '#cbd5e1';
     return baseGrains.map((d, i) => <path key={i} d={d} fill={assignments[i]} stroke={boundaryColor} strokeWidth={etchant === 'polished' ? 0.5 : 2} strokeLinejoin="round" filter={`url(#${filterId})`}/>);
-  }, [c, regionId, state.microFractions, theme, pid, filterId, etchant, isDark]);
+  }, [c, regionId, state.microFractions, theme, pid, filterId, etchant, isDark, t]);
 
   const glowStyle = {
     boxShadow: t > 600 ? `0 0 40px 10px ${getBlackbodyGlow(t, 0.6)}, inset 0 0 30px 5px ${getBlackbodyGlow(t, 0.6)}` : 'none',
@@ -1747,8 +1755,8 @@ const TopNav = () => {
         <button onClick={() => setZoomSteel(!zoomSteel)} className={cn("flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-all shadow-sm focus-visible:outline-none", zoomSteel ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700' : (isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-slate-200' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'))}>
           <Search size={16}/> <span className="hidden sm:inline">{zoomSteel ? 'Full Map' : 'Steel View'}</span>
         </button>
-        <button onClick={() => setIsDark(!isDark)} className={cn("p-2.5 rounded-xl border transition-all shadow-sm focus-visible:outline-none", isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-amber-400' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600')}>
-          {isDark ? <Sun size={18} /> : <Moon size={18} />}
+        <button aria-label="Toggle dark mode" onClick={() => setIsDark(!isDark)} className={cn("p-2.5 rounded-xl border transition-all shadow-sm focus-visible:outline-none", isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-amber-400' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600')}>
+          {isDark ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
         </button>
       </div>
     </nav>
@@ -1758,6 +1766,7 @@ const TopNav = () => {
 const ControlsSection = () => {
   const { carbon, temp, mode, maxRate } = useThermoState();
   const { alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, changeMode, zoomSteel, setZoomSteel, theme, isDark, maxC } = useThermoAction();
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
 
   const [showAlloys, setShowAlloys] = useState(false);
 
@@ -2472,6 +2481,13 @@ const TelemetrySection = () => {
         </div>
 
       </div>
+
+      {/* Snapshot Toast Notification */}
+      {captureMsg && (
+        <div className="absolute bottom-20 right-4 bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-lg animate-in slide-in-from-right-2 z-50 pointer-events-none">
+          Snapshot saved!
+        </div>
+      )}
     </section>
   );
 };
