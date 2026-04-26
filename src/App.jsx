@@ -11,7 +11,7 @@ import {
 // ============================================================================
 // MODULE: CONFIGURATION & CONSTANTS
 // ============================================================================
-const APP_VERSION = "v14.6 PRO (Alloy Navigator Update)";
+const APP_VERSION = "v16.0 PRO (JMAK CCT Kinetics)";
 
 const CONSTANTS = {
   FE_C: {
@@ -93,32 +93,133 @@ const convertHardness = (hv) => {
 // ============================================================================
 // MODULE: THERMODYNAMIC & KINETIC ENGINE
 // ============================================================================
+
+const KineticEngine = {
+  // Avrami equation — fraction transformed X at time t:
+  avrami: (t, k, n) => 1 - Math.exp(-k * Math.pow(Math.max(0, t), n)),
+  
+  // Isothermal start time for pearlite — Kirkaldy 1983 adaptation:
+  pearliteStartTime: (T, alloy, consts) => {
+    const { mn, cr, mo } = alloy;
+    const dT = Math.max(1, consts.T_EUTECTOID - T); // undercooling
+    const alloyFactor = Math.exp(1.0 * mn + 0.7 * cr + 1.2 * mo);
+    return alloyFactor * Math.exp(23500 / (8.314 * (T + 273))) / Math.pow(dT, 3);
+  }, 
+
+  // Scheil's additivity — integrates over continuous cooling path:
+  getCCTTransformation: (coolingPath, alloy, consts) => {
+    let pearliteSum = 0;
+    let bainiteSum = 0;
+    let X_pearlite = 0;
+    let X_bainite = 0;
+    let pearliteStartT = null;
+    let bainiteStartT = null;
+
+    for (let i = 1; i < coolingPath.length; i++) {
+      const T = coolingPath[i].t;
+      const dt = Math.max(0, coolingPath[i].time - coolingPath[i-1].time);
+      
+      if (T < consts.T_EUTECTOID && T > consts.T_bs) {
+        const t_start = KineticEngine.pearliteStartTime(T, alloy, consts);
+        pearliteSum += dt / t_start;
+        if (pearliteSum >= 1 && X_pearlite < 0.99) {
+          if (pearliteStartT === null) pearliteStartT = coolingPath[i].time;
+          const t_elapsed = coolingPath[i].time - pearliteStartT;
+          X_pearlite = KineticEngine.avrami(t_elapsed, 0.02, 1.8);
+        }
+      }
+      
+      if (T <= consts.T_bs && T > consts.T_ms) {
+        const t_start = KineticEngine.pearliteStartTime(T, alloy, consts) * 1.5;
+        bainiteSum += dt / t_start;
+        if (bainiteSum >= 1 && X_bainite < 0.99) {
+          if (bainiteStartT === null) bainiteStartT = coolingPath[i].time;
+          const t_elapsed = coolingPath[i].time - bainiteStartT;
+          X_bainite = KineticEngine.avrami(t_elapsed, 0.01, 2.2);
+        }
+      }
+    }
+    
+    const T_final = coolingPath.length > 0 ? coolingPath[coolingPath.length - 1].t : 20;
+    const X_martensite = T_final < consts.T_ms
+      ? 1 - Math.exp(-0.011 * (consts.T_ms - T_final))
+      : 0;
+      
+    return {
+      fractions: {
+        pearlite: Math.max(0, Math.min(1 - X_martensite, X_pearlite)),
+        bainite: Math.max(0, Math.min(1 - X_martensite - X_pearlite, X_bainite)),
+        martensite: Math.max(0, Math.min(1, X_martensite)),
+        retained_austenite: Math.max(0, 1 - X_pearlite - X_bainite - X_martensite)
+      },
+      pearliteStarted: pearliteSum >= 1,
+      bainiteStarted: bainiteSum >= 1
+    };
+  }
+};
+
 const ThermoEngine = {
-  c_alpha: (T) => {
-    if (T > CONSTANTS.FE_C.T_A3_PURE) return 0;
-    if (T >= CONSTANTS.FE_C.T_EUTECTOID) return CONSTANTS.FE_C.C_FERRITE_MAX * ((CONSTANTS.FE_C.T_A3_PURE - T) / (CONSTANTS.FE_C.T_A3_PURE - CONSTANTS.FE_C.T_EUTECTOID));
-    return CONSTANTS.FE_C.C_FERRITE_MAX * Math.pow(Math.max(0, T) / CONSTANTS.FE_C.T_EUTECTOID, 3);
+  getAlloyAdjustedConstants: function(alloy) {
+    const { c=0, mn=0, si=0, cr=0, ni=0, mo=0, v=0 } = alloy || {};
+    
+    // Eutectoid temperature shift — each element moves A1 (Andrews 1965):
+    const dT_eutectoid = -(16.9 * ni) + (29.1 * si) + (16.9 * cr) - (10.7 * mn) + (290 * v) + (6.38 * mo);
+    
+    // Eutectoid carbon shift — carbide formers (Cr, Mo) lower it:
+    const dC_eutectoid = -(0.018 * mn) - (0.022 * si) + (0.031 * mo) - (0.0075 * cr) + (0.018 * ni);
+    
+    // Approximate A3 shift to keep diagram topologically coherent
+    const dT_A3 = -(14 * ni) + (44 * si) + (10 * cr) - (35 * mn) + (60 * mo);
+
+    // Ms temperature — Krauss equation:
+    const Ms = 539 - (423 * c) - (30.4 * mn) - (17.7 * ni) - (12.1 * cr) - (7.5 * mo);
+    
+    // Martensite finish temperature (Steven & Haynes):
+    const Mf = Ms - 215; 
+    
+    // Bainite start:
+    const Bs = 830 - (270 * c) - (90 * mn) - (37 * ni) - (70 * cr) - (83 * mo);
+
+    return {
+      T_EUTECTOID: CONSTANTS.FE_C.T_EUTECTOID + dT_eutectoid,
+      C_EUTECTOID: Math.max(0.1, CONSTANTS.FE_C.C_EUTECTOID + dC_eutectoid),
+      T_A3_PURE: CONSTANTS.FE_C.T_A3_PURE + dT_A3,
+      T_ms: Math.max(20, Ms),
+      T_mf: Math.max(0, Mf),
+      T_bs: Math.max(100, Bs)
+    };
   },
-  c_a3: (T) => {
-    if (T > CONSTANTS.FE_C.T_A3_PURE) return 0;
-    if (T < CONSTANTS.FE_C.T_EUTECTOID) return CONSTANTS.FE_C.C_EUTECTOID;
-    return CONSTANTS.FE_C.C_EUTECTOID * Math.pow((CONSTANTS.FE_C.T_A3_PURE - T) / (CONSTANTS.FE_C.T_A3_PURE - CONSTANTS.FE_C.T_EUTECTOID), 0.9);
+  
+  c_alpha: (T, consts) => {
+    if (T > consts.T_A3_PURE) return 0;
+    if (T >= consts.T_EUTECTOID) return CONSTANTS.FE_C.C_FERRITE_MAX * ((consts.T_A3_PURE - T) / (consts.T_A3_PURE - consts.T_EUTECTOID));
+    return CONSTANTS.FE_C.C_FERRITE_MAX * Math.pow(Math.max(0, T) / consts.T_EUTECTOID, 3);
   },
-  c_acm: (T) => {
-    if (T < CONSTANTS.FE_C.T_EUTECTOID) return CONSTANTS.FE_C.C_EUTECTOID;
+  
+  c_a3: (T, consts) => {
+    if (T > consts.T_A3_PURE) return 0;
+    if (T < consts.T_EUTECTOID) return consts.C_EUTECTOID;
+    return consts.C_EUTECTOID * Math.pow((consts.T_A3_PURE - T) / (consts.T_A3_PURE - consts.T_EUTECTOID), 0.9);
+  },
+  
+  c_acm: (T, consts) => {
+    if (T < consts.T_EUTECTOID) return consts.C_EUTECTOID;
     if (T > CONSTANTS.FE_C.T_EUTECTIC) return CONSTANTS.FE_C.C_AUSTENITE_MAX;
-    return CONSTANTS.FE_C.C_EUTECTOID + (CONSTANTS.FE_C.C_AUSTENITE_MAX - CONSTANTS.FE_C.C_EUTECTOID) * Math.pow((T - CONSTANTS.FE_C.T_EUTECTOID) / (CONSTANTS.FE_C.T_EUTECTIC - CONSTANTS.FE_C.T_EUTECTOID), 1.4);
+    return consts.C_EUTECTOID + (CONSTANTS.FE_C.C_AUSTENITE_MAX - consts.C_EUTECTOID) * Math.pow((T - consts.T_EUTECTOID) / (CONSTANTS.FE_C.T_EUTECTIC - consts.T_EUTECTOID), 1.4);
   },
+  
   c_solidus: (T) => {
     if (T < CONSTANTS.FE_C.T_EUTECTIC) return CONSTANTS.FE_C.C_AUSTENITE_MAX;
     if (T > CONSTANTS.FE_C.T_PERITECTIC) return CONSTANTS.FE_C.C_PERITECTIC_G;
     return CONSTANTS.FE_C.C_PERITECTIC_G + (CONSTANTS.FE_C.C_AUSTENITE_MAX - CONSTANTS.FE_C.C_PERITECTIC_G) * Math.pow((CONSTANTS.FE_C.T_PERITECTIC - T) / (CONSTANTS.FE_C.T_PERITECTIC - CONSTANTS.FE_C.T_EUTECTIC), 0.85);
   },
+  
   c_liquidus: (T) => {
     if (T < CONSTANTS.FE_C.T_EUTECTIC) return CONSTANTS.FE_C.C_EUTECTIC;
     if (T > CONSTANTS.FE_C.T_PERITECTIC) return CONSTANTS.FE_C.C_PERITECTIC_L;
     return CONSTANTS.FE_C.C_PERITECTIC_L + (CONSTANTS.FE_C.C_EUTECTIC - CONSTANTS.FE_C.C_PERITECTIC_L) * Math.pow((CONSTANTS.FE_C.T_PERITECTIC - T) / (CONSTANTS.FE_C.T_PERITECTIC - CONSTANTS.FE_C.T_EUTECTIC), 0.85);
   },
+  
   c_l_fe3c: (T) => {
     if (T < CONSTANTS.FE_C.T_EUTECTIC) return CONSTANTS.FE_C.C_EUTECTIC;
     return CONSTANTS.FE_C.C_EUTECTIC + (CONSTANTS.FE_C.C_CEMENTITE - CONSTANTS.FE_C.C_EUTECTIC) * ((T - CONSTANTS.FE_C.T_EUTECTIC) / 103);
@@ -144,7 +245,9 @@ const ThermoEngine = {
     return { regionId: id, fractions: [{ name, frac: 100, pos: c_bulk }] };
   },
 
-  calculateEquilibrium: function(safeC, safeT) {
+  calculateEquilibrium: function(safeC, safeT, alloyObj) {
+    const consts = this.getAlloyAdjustedConstants(alloyObj);
+
     if (safeT >= CONSTANTS.FE_C.T_GAMMA_MAX) {
       if (safeT >= CONSTANTS.FE_C.T_MELT) return this.singlePhase('L', 'Liquid', safeC);
       if (safeT >= CONSTANTS.FE_C.T_PERITECTIC) {
@@ -175,31 +278,33 @@ const ThermoEngine = {
       if (safeC <= c_lf) return this.singlePhase('L', 'Liquid', safeC);
       return this.leverRule('L_Fe3C', 'Liquid', 'Cementite (Fe₃C)', safeC, c_lf, CONSTANTS.FE_C.C_CEMENTITE);
     }
-    if (safeT > CONSTANTS.FE_C.T_EUTECTOID) {
-      let c_a3_val = this.c_a3(safeT);
-      let c_acm_val = this.c_acm(safeT);
-      let c_al = this.c_alpha(safeT);
+    if (safeT > consts.T_EUTECTOID) {
+      let c_a3_val = this.c_a3(safeT, consts);
+      let c_acm_val = this.c_acm(safeT, consts);
+      let c_al = this.c_alpha(safeT, consts);
       if (safeC <= c_al) return this.singlePhase('alpha', 'Ferrite (α)', safeC);
       if (safeC <= c_a3_val) return this.leverRule('alpha_gamma', 'Ferrite (α)', 'Austenite (γ)', safeC, c_al, c_a3_val);
       if (safeC <= c_acm_val) return this.singlePhase('gamma', 'Austenite (γ)', safeC);
       return this.leverRule('gamma_Fe3C', 'Austenite (γ)', 'Cementite (Fe₃C)', safeC, c_acm_val, CONSTANTS.FE_C.C_CEMENTITE);
     }
-    let c_al = this.c_alpha(safeT);
+    let c_al = this.c_alpha(safeT, consts);
     if (safeC <= c_al) return this.singlePhase('alpha', 'Ferrite (α)', safeC);
     return this.leverRule('alpha_Fe3C', 'Ferrite (α)', 'Cementite (Fe₃C)', safeC, c_al, CONSTANTS.FE_C.C_CEMENTITE);
   },
 
-  getState: function(alloy, T, rate, processMode, maxRateExperienced, lowestTemp) {
-    const c = typeof alloy === 'object' ? alloy.c : alloy;
-    const safeC = Math.max(0, Math.min(CONSTANTS.FE_C.C_CEMENTITE, c));
+  getState: function(alloy, T, rate, processMode, maxRateExperienced, lowestTemp, historyTrail = []) {
+    const alloyObj = typeof alloy === 'object' ? alloy : { c: alloy, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, cu: 0, v: 0 };
+    const safeC = Math.max(0, Math.min(CONSTANTS.FE_C.C_CEMENTITE, alloyObj.c));
     const safeT = Math.max(0, T);
     
-    // Strict Thermodynamic Phase Fractions (lever rule)
-    let { regionId, fractions: phaseFractions } = this.calculateEquilibrium(safeC, safeT);
+    const consts = this.getAlloyAdjustedConstants(alloyObj);
 
-    const msTemp = Math.max(20, CONSTANTS.KM_EQ.MS_BASE - CONSTANTS.KM_EQ.C_FACTOR * safeC);
-    const mfTemp = Math.max(0, msTemp - 215); 
-    const bsTemp = Math.max(100, CONSTANTS.KM_EQ.BS_BASE - CONSTANTS.KM_EQ.BS_C_FACTOR * safeC);
+    // Strict Thermodynamic Phase Fractions (lever rule)
+    let { regionId, fractions: phaseFractions } = this.calculateEquilibrium(safeC, safeT, alloyObj);
+
+    const msTemp = consts.T_ms;
+    const mfTemp = consts.T_mf; 
+    const bsTemp = consts.T_bs;
 
     let microState = { isQuenched: false, isMetastable: false, isBainitic: false, isTempered: false, martensiteFrac: 0 };
     let activeRate = Math.max(rate, maxRateExperienced);
@@ -207,50 +312,68 @@ const ThermoEngine = {
     // Morphological Microconstituents (Defaults to phases)
     let microFractions = [...phaseFractions];
 
-    // Non-equilibrium Transformations
-    if (safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX && safeT <= CONSTANTS.FE_C.T_EUTECTOID) {
+    let effHistory = historyTrail;
+    // Generate robust synthetic path if history is missing but we're actively cooling (e.g. Inv. Design)
+    if (effHistory.length < 2 && activeRate > 0) {
+        effHistory = [];
+        let time = 0;
+        const startT = Math.max(safeT, 900);
+        for (let t = startT; t >= safeT; t -= 5) {
+            effHistory.push({ t, time, c: safeC });
+            time += 5 / activeRate;
+        }
+    }
+
+    // Non-equilibrium Transformations using JMAK / Scheil Kinetics
+    if (safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX && safeT <= consts.T_EUTECTOID) {
       if (processMode === 'temper' && maxRateExperienced >= CONSTANTS.RATES.CRITICAL_MARTENSITE) {
         microState.isTempered = true;
         regionId = 'tempered_martensite';
-        phaseFractions = [{ name: 'Ferrite (α)', frac: 90, pos: safeC }, { name: 'Cementite (Fe₃C)', frac: 10, pos: safeC }];
+        phaseFractions = JSON.parse(JSON.stringify(this.calculateEquilibrium(safeC, 20, alloyObj).fractions)); 
         microFractions = [{ name: 'Tempered Martensite', frac: 100, pos: safeC }];
-      } else if (activeRate >= CONSTANTS.RATES.CRITICAL_MARTENSITE && safeT <= msTemp) {
-        microState.isQuenched = true;
-        let fm = 1 - Math.exp(-CONSTANTS.KM_EQ.K_BASE * (msTemp - lowestTemp));
-        fm = Math.max(0, Math.min(1, fm));
-        microState.martensiteFrac = fm;
-        regionId = 'martensite';
-        phaseFractions = [
-          { name: 'Martensite (BCT)', frac: fm * 100, pos: safeC },
-          { name: 'Austenite (γ)', frac: (1 - fm) * 100, pos: safeC }
-        ];
-        microFractions = [
-          { name: 'Martensite', frac: fm * 100, pos: safeC },
-          { name: 'Retained Austenite', frac: (1 - fm) * 100, pos: safeC }
-        ];
-      } else if (activeRate >= CONSTANTS.RATES.CRITICAL_BAINITE && activeRate < CONSTANTS.RATES.CRITICAL_MARTENSITE && safeT <= bsTemp) {
-        microState.isBainitic = true;
-        regionId = 'bainite';
-        phaseFractions = [{ name: 'Ferrite (α)', frac: 90, pos: safeC }, { name: 'Cementite (Fe₃C)', frac: 10, pos: safeC }];
-        microFractions = [{ name: 'Bainite', frac: 100, pos: safeC }];
-      } else if (activeRate >= CONSTANTS.RATES.CRITICAL_BAINITE && safeT > msTemp) {
-        microState.isMetastable = true;
-        regionId = 'gamma_metastable';
-        phaseFractions = [{ name: 'Austenite (γ)', frac: 100, pos: safeC }];
-        microFractions = [{ name: 'Supercooled Austenite', frac: 100, pos: safeC }];
+      } else if (effHistory.length > 2) {
+        const cct = KineticEngine.getCCTTransformation(effHistory, alloyObj, consts);
+        const { pearlite, bainite, martensite, retained_austenite } = cct.fractions;
+        
+        const fProeutectoidAlpha = safeC < consts.C_EUTECTOID ? (consts.C_EUTECTOID - safeC) / (consts.C_EUTECTOID - CONSTANTS.FE_C.C_FERRITE_MAX) : 0;
+        const fProeutectoidCem = safeC > consts.C_EUTECTOID ? (safeC - consts.C_EUTECTOID) / (CONSTANTS.FE_C.C_CEMENTITE - consts.C_EUTECTOID) : 0;
+        const fAusteniteAvailable = 1 - fProeutectoidAlpha - fProeutectoidCem;
+
+        const dynFractions = [];
+        if (fProeutectoidAlpha > 0.01) dynFractions.push({ name: 'Proeutectoid Ferrite', frac: fProeutectoidAlpha * 100, pos: safeC });
+        if (fProeutectoidCem > 0.01) dynFractions.push({ name: 'Proeutectoid Cementite', frac: fProeutectoidCem * 100, pos: safeC });
+        
+        if (pearlite > 0.01) dynFractions.push({ name: 'Pearlite', frac: pearlite * fAusteniteAvailable * 100, pos: safeC });
+        if (bainite > 0.01) dynFractions.push({ name: 'Bainite', frac: bainite * fAusteniteAvailable * 100, pos: safeC });
+        if (martensite > 0.01) dynFractions.push({ name: 'Martensite', frac: martensite * fAusteniteAvailable * 100, pos: safeC });
+        if (retained_austenite > 0.01) dynFractions.push({ name: safeT > consts.T_ms ? 'Supercooled Austenite' : 'Retained Austenite', frac: retained_austenite * fAusteniteAvailable * 100, pos: safeC });
+
+        if (dynFractions.length > 0) {
+          microFractions = dynFractions;
+          phaseFractions = JSON.parse(JSON.stringify(dynFractions)); // Sync phaseFractions to properly route property models
+          
+          microState.isQuenched = martensite > 0.1;
+          microState.martensiteFrac = martensite;
+          microState.isBainitic = bainite > Math.max(pearlite, martensite);
+          microState.isMetastable = retained_austenite > 0.5 && safeT > consts.T_ms;
+
+          if (microState.isQuenched) regionId = 'martensite';
+          else if (microState.isBainitic) regionId = 'bainite';
+          else if (microState.isMetastable) regionId = 'gamma_metastable';
+        }
       }
     }
 
-    // Microconstituent logic for equilibrium structures at Room Temp
-    if (!microState.isQuenched && !microState.isBainitic && !microState.isTempered && !microState.isMetastable) {
+    // Microconstituent logic for equilibrium structures at Room Temp (Fallback if CCT didn't run or completed purely to Pearlite)
+    if (!microState.isQuenched && !microState.isBainitic && !microState.isTempered && !microState.isMetastable && effHistory.length <= 2) {
        if (regionId === 'alpha_Fe3C') {
-          if (safeC < CONSTANTS.FE_C.C_EUTECTOID) {
-             const fAlphaPro = (CONSTANTS.FE_C.C_EUTECTOID - safeC) / (CONSTANTS.FE_C.C_EUTECTOID - CONSTANTS.FE_C.C_FERRITE_MAX);
+          if (safeC < consts.C_EUTECTOID) {
+             const fAlphaPro = (consts.C_EUTECTOID - safeC) / (consts.C_EUTECTOID - CONSTANTS.FE_C.C_FERRITE_MAX);
              microFractions = [{ name: 'Proeutectoid Ferrite', frac: fAlphaPro*100 }, { name: 'Pearlite', frac: (1-fAlphaPro)*100 }];
-          } else if (Math.abs(safeC - CONSTANTS.FE_C.C_EUTECTOID) < 0.02) {
+          } else if (Math.abs(safeC - consts.C_EUTECTOID) < 0.02) {
              microFractions = [{ name: 'Pearlite', frac: 100 }];
           } else if (safeC <= CONSTANTS.FE_C.C_AUSTENITE_MAX) {
-             const fCemPro = (safeC - CONSTANTS.FE_C.C_EUTECTOID) / (CONSTANTS.FE_C.C_CEMENTITE - CONSTANTS.FE_C.C_EUTECTOID);
+             const fCemPro = (safeC - consts.C_EUTECTOID) / (CONSTANTS.FE_C.C_CEMENTITE - consts.C_EUTECTOID);
              microFractions = [{ name: 'Proeutectoid Cementite', frac: fCemPro*100 }, { name: 'Pearlite', frac: (1-fCemPro)*100 }];
           } else {
              const fLedeburite = (safeC - CONSTANTS.FE_C.C_AUSTENITE_MAX) / (CONSTANTS.FE_C.C_CEMENTITE - CONSTANTS.FE_C.C_AUSTENITE_MAX);
@@ -276,7 +399,7 @@ const ThermoEngine = {
     else if (regionId === 'delta_gamma') regionLabel = 'Two-Phase (δ + γ)';
     else if (regionId === 'alpha_gamma') regionLabel = 'Intercritical (α + γ)';
     else if (regionId === 'gamma_Fe3C') regionLabel = safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? 'Austenite + Fe₃C' : 'Austenite + Ledeburite';
-    else if (regionId === 'alpha_Fe3C') regionLabel = safeC < CONSTANTS.FE_C.C_EUTECTOID ? 'Hypoeutectoid (α + P)' : Math.abs(safeC-CONSTANTS.FE_C.C_EUTECTOID)<0.02 ? 'Eutectoid (Pearlite)' : safeC <= CONSTANTS.FE_C.C_AUSTENITE_MAX ? 'Hypereutectoid (P + Fe₃C)' : 'White Cast Iron';
+    else if (regionId === 'alpha_Fe3C') regionLabel = safeC < consts.C_EUTECTOID ? 'Hypoeutectoid (α + P)' : Math.abs(safeC-consts.C_EUTECTOID)<0.02 ? 'Eutectoid (Pearlite)' : safeC <= CONSTANTS.FE_C.C_AUSTENITE_MAX ? 'Hypereutectoid (P + Fe₃C)' : 'White Cast Iron';
     else if (regionId === 'L_Fe3C') regionLabel = 'Liquid + Fe₃C';
 
     return { 
@@ -284,50 +407,101 @@ const ThermoEngine = {
       msTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? msTemp : null,
       mfTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? mfTemp : null,
       bsTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? bsTemp : null,
-      ...this.predictProperties(typeof alloy === 'object' ? alloy : {c: safeC, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, cu: 0, v: 0}, safeT, phaseFractions, microState, activeRate)
+      ...this.predictProperties(alloyObj, safeT, phaseFractions, microFractions, microState, activeRate)
     };
   },
 
-  predictProperties: function(alloy, T, phaseFractions, microState, coolingRate) {
+  predictProperties: function(alloy, T, phaseFractions, microFractions, microState, coolingRate) {
     let c = alloy.c;
     let fLiq = phaseFractions.find(f => f.name.includes('Liquid'))?.frac / 100 || 0;
     if (fLiq > 0.99) return { micro: 'Uniform Liquid Phase', crystal: 'Amorphous', yield: 0, uts: 0, hardness: { hv: 0, hrc: 0, hb: 0 }, elong: 100, grainSize: 0, fatigue: 0, dbtt: 0, paramA: 0, paramC: 0 };
 
     const getF = (n) => phaseFractions.find(f => f.name.includes(n))?.frac / 100 || 0;
     let fGamma = getF('Austenite'), fAlpha = getF('Ferrite'), fDelta = getF('Delta'), 
-        fCem = getF('Cementite'), fMart = getF('Martensite'), fBain = microState.isBainitic ? 1 : 0, fTemp = microState.isTempered ? 1 : 0;
+        fCem = getF('Cementite'), fMart = getF('Martensite');
 
-    const effectiveT = T < CONSTANTS.FE_C.T_EUTECTOID ? CONSTANTS.FE_C.T_EUTECTOID : T;
+    const consts = this.getAlloyAdjustedConstants(alloy);
+
+    // ── 1. GRAIN SIZE (ASTM → diameter in mm) ──────────────────────────
+    const effectiveT = T < consts.T_EUTECTOID ? consts.T_EUTECTOID : T;
     let grainSizeASTM = Math.max(1, 10 - Math.max(0, effectiveT - 700) / 150); 
     if (coolingRate > 5) grainSizeASTM += Math.min(4, coolingRate / 10); 
     if (microState.isQuenched) grainSizeASTM = Math.min(14, grainSizeASTM + 4);
+    const d_mm = Math.pow(2, -(grainSizeASTM + 1)) * 25.4; // Valid ASTM conversion
 
-    let d_mm = 1 / Math.sqrt(Math.pow(2, grainSizeASTM) * 7.74);
-    let hallPetchFactor = 15 / Math.sqrt(d_mm);
-
+    // ── 2. SOLID SOLUTION STRENGTHENING — Pickering & Gladman 1972 ─────
     const { mn, si, cr, ni, mo, cu, v } = alloy;
-    let sssYield = (32 * mn) + (84 * si) + (38 * cu) + (11 * mo) + (15 * cr);
-    let sssHardness = (10 * mn) + (25 * si) + (12 * cu) + (4 * mo) + (3 * cr);
-    let sssFactor = Math.max(0.2, 1 - fMart * 0.8);
+    const c_in_solution = microState.isQuenched ? c : Math.min(c, 0.022);
+    const sigma_ss = (32 * mn) + (84 * si) + (38 * cu) + (11 * mo) + (15 * cr) + (600 * Math.sqrt(c_in_solution));
 
-    let baseYield = (fGamma * 150) + (fAlpha * 200) + (fDelta * 100) + (fCem * 900) + 
-                    (fMart * (1000 + 2000 * c)) + (fBain * (600 + 1000 * c)) + 
-                    (fTemp * (800 + 1200 * c)) + hallPetchFactor + (sssYield * sssFactor);
-                    
-    let baseHardness = (fGamma * 120) + (fAlpha * 90) + (fDelta * 80) + (fCem * 800) + 
-                       (fMart * (300 + 500 * c)) + (fBain * (250 + 300 * c)) + (fTemp * (250 + 200 * c)) + (sssHardness * sssFactor);
-                       
-    let baseElong = (fGamma * 40) + (fAlpha * 35) + (fDelta * 40) + (fCem * 1) + 
-                    (fMart * Math.max(1, 10 - c*10)) + (fBain * 15) + (fTemp * 20);
+    // ── 3. HALL-PETCH GRAIN BOUNDARY STRENGTHENING ─────────────────────
+    const sigma_0 = 53.9; // Friction stress of pure iron
+    const k_y = 17.4;     // Standard Petch coefficient
+    const sigma_hp = k_y / Math.sqrt(d_mm);
 
-    let thermalFactor = T > 20 ? Math.max(0.05, 1 - Math.pow((T - 20) / 1400, 1.5)) : 1.0;
+    // ── 4. MARTENSITE HARDENING — Speich & Warlimont 1968 ──────────────
+    let hv_mart_safe = 0;
+    if (microState.isQuenched || microState.isTempered) {
+      hv_mart_safe = 127 + (949 * c) + (27 * si) + (11 * mn) + (8 * ni) + (16 * cr);
+      if (v > 0.01) hv_mart_safe += 21 * Math.log10(v);
+      hv_mart_safe = Math.max(100, hv_mart_safe);
+    }
 
-    let yieldStr = baseYield * thermalFactor;
-    let hardness = baseHardness * thermalFactor;
-    let uts = yieldStr * 1.3 + hardness * 0.4;
-    let elong = baseElong * (1 + (1 - thermalFactor)); 
-    let fatigueLimit = T > 600 ? 0 : Math.min(uts * 0.5, 700);
+    // ── 5. PEARLITE SPACING CONTRIBUTION ──────────────────────────────
+    let fPearlite = microFractions.find(f => f.name.includes('Pearlite'))?.frac / 100 || 0;
     
+    if (fPearlite === 0 && !microState.isQuenched && !microState.isBainitic && !microState.isTempered && !microState.isMetastable && T < consts.T_EUTECTOID) {
+       if (c < CONSTANTS.FE_C.C_FERRITE_MAX) fPearlite = 0;
+       else if (c <= consts.C_EUTECTOID) fPearlite = (c - CONSTANTS.FE_C.C_FERRITE_MAX) / (consts.C_EUTECTOID - CONSTANTS.FE_C.C_FERRITE_MAX);
+       else if (c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) fPearlite = (CONSTANTS.FE_C.C_CEMENTITE - c) / (CONSTANTS.FE_C.C_CEMENTITE - consts.C_EUTECTOID);
+       else fPearlite = Math.max(0, (6.67 - c) / (6.67 - 0.76) * (CONSTANTS.FE_C.C_AUSTENITE_MAX/c)); // Appx for Cast Iron matrix
+    }
+    fPearlite = Math.max(0, Math.min(1, fPearlite));
+
+    // Under-cooling defines spacing S0. Faster cool = finer spacing. Ridley 1984 adaptation.
+    const formUndercooling = Math.max(10, 10 * Math.sqrt(Math.max(0.1, coolingRate || 1)));
+    const S0_mm = 8.02e-4 / formUndercooling; 
+    const sigma_pearlite = fPearlite > 0.01 ? fPearlite * (286 + 2.18 / Math.sqrt(S0_mm)) : 0;
+
+    // ── 6. BAINITE — Bhadeshia model ──────────────────────────────────
+    let fBainite = microFractions.find(f => f.name.includes('Bainite'))?.frac / 100 || 0;
+    const sigma_bainite = (microState.isBainitic || fBainite > 0.01) ? (395 * Math.sqrt(c)) + (68 * mn) + (75 * si) + (15 * ni) + (183 * mo) : 0;
+
+    // ── 7. THERMAL SOFTENING ──────────────────────────────────────────
+    const Tm_K = (CONSTANTS.FE_C.T_MELT + 273);
+    const T_K = T + 273;
+    const thermalFactor = T_K < 0.3 * Tm_K ? 1.0 : Math.exp(-3.5 * Math.pow((T_K - 0.3 * Tm_K) / (0.7 * Tm_K), 1.8));
+
+    // ── 8. ASSEMBLE ─────────────────────────────────────────────────────
+    let yieldStr = (sigma_0 + sigma_ss + sigma_hp + sigma_pearlite + sigma_bainite) * thermalFactor;
+    
+    if (microState.isQuenched) yieldStr = (hv_mart_safe * 3.3) * thermalFactor; // Empirical HV -> MPa Yield
+    if (microState.isTempered) yieldStr = (hv_mart_safe * 3.3 * 0.75) * thermalFactor; // Tempering relief
+    
+    if (T >= consts.T_EUTECTOID && !microState.isQuenched && !microState.isBainitic && !microState.isMetastable) {
+       // High temp austenite / delta baseline before thermal softening drops it further
+       let baseHighT = (fGamma * 150) + (fDelta * 100);
+       yieldStr = Math.max(yieldStr, baseHighT * thermalFactor);
+    }
+
+    // ── 9. UTS & STRAIN HARDENING (Hollomon + Considere Criterion) ──────
+    const n_strain_harden = microState.isQuenched ? 0.05 : Math.max(0.05, 0.22 - (0.14 * c));
+    // Scientifically robust translation of True Yield -> Eng UTS 
+    // True Yield ~ K(0.002)^n. Eng UTS = K(n)^n * exp(-n). 
+    const utsMultiplier = Math.pow(n_strain_harden / 0.002, n_strain_harden) * Math.exp(-n_strain_harden);
+    let uts = yieldStr * utsMultiplier;
+    uts = Math.max(yieldStr * 1.05, uts); // Safety bound
+
+    // ── 10. ELONGATION & HARDNESS ─────────────────────────────────────
+    let elong = microState.isQuenched ? Math.max(1, 18 - (30 * c)) : Math.min(45, 10 + (50 * n_strain_harden));
+    elong = elong * (1 + (1 - thermalFactor)); // More ductile at high temp
+
+    let hv = microState.isQuenched ? hv_mart_safe : (yieldStr / 3.3);
+    if (microState.isTempered) hv = hv_mart_safe * 0.8;
+    hv = hv * thermalFactor;
+
+    // ── 11. SECONDARY PROPERTIES (Crystal, Fracture) ──────────────────
+    let fatigueLimit = T > 600 ? 0 : Math.min(uts * 0.5, 700);
     let dbtt = -50 + (c * 200) - (grainSizeASTM * 5) + (mn * -30) + (ni * -25) + (si * 44) + (cr * 10); 
     if (microState.isQuenched) dbtt += 150; 
     if (microState.isBainitic) dbtt -= 20; 
@@ -335,28 +509,23 @@ const ThermoEngine = {
 
     let crystal = 'Mixed';
     let a = 2.866, c_param = 2.866; 
-
-    if (fGamma > 0.5 || microState.isMetastable) {
-      crystal = 'FCC'; a = 3.56 + 0.03 * c; c_param = a;
-    } else if (microState.isQuenched && fMart > 0.5) {
-      crystal = 'BCT'; a = 2.866 - 0.013 * c; c_param = 2.866 + 0.116 * c;
-    } else if (fAlpha > 0.5 || fDelta > 0.5 || fTemp > 0.5 || fBain > 0.5) {
-      crystal = 'BCC'; a = 2.866; c_param = a;
-    }
+    if (fGamma > 0.5 || microState.isMetastable) { crystal = 'FCC'; a = 3.56 + 0.03 * c; c_param = a; }
+    else if (microState.isQuenched && (microState.martensiteFrac > 0.5 || fMart > 0.5)) { crystal = 'BCT'; a = 2.866 - 0.013 * c; c_param = 2.866 + 0.116 * c; }
+    else if (fAlpha > 0.5 || fDelta > 0.5 || microState.isTempered || microState.isBainitic) { crystal = 'BCC'; a = 2.866; c_param = a; }
 
     let micro = 'Mixed Phase';
     if (microState.isTempered) micro = 'Tempered Martensite (Ferrite + Fine Fe₃C carbides)';
-    else if (microState.isQuenched) micro = c < 0.6 ? `Lath Martensite + ${Math.round((1-microState.martensiteFrac)*100)}% Ret. γ` : `Plate Martensite + ${Math.round((1-microState.martensiteFrac)*100)}% Ret. γ`;
+    else if (microState.isQuenched) micro = c < 0.6 ? `Lath Martensite + ${Math.round((1-(microState.martensiteFrac||1))*100)}% Ret. γ` : `Plate Martensite + ${Math.round((1-(microState.martensiteFrac||1))*100)}% Ret. γ`;
     else if (microState.isBainitic) micro = T > 400 ? 'Upper Bainite (Feathery)' : 'Lower Bainite (Acicular)';
     else if (microState.isMetastable) micro = 'Supercooled Austenite';
-    else if (T > CONSTANTS.FE_C.T_EUTECTOID) {
+    else if (T > consts.T_EUTECTOID) {
       if (fDelta > 0.5) micro = 'Delta Ferrite Matrix';
       else if (fGamma > 0.5) micro = 'Austenitic Grains';
       else micro = 'High Temp Mixed Phase';
     } else {
       if (c < CONSTANTS.FE_C.C_FERRITE_MAX) micro = 'Equiaxed Ferrite';
-      else if (Math.abs(c - CONSTANTS.FE_C.C_EUTECTOID) < 0.02) micro = '100% Pearlite (Lamellar)';
-      else if (c < CONSTANTS.FE_C.C_EUTECTOID) micro = 'Proeutectoid Ferrite + Pearlite';
+      else if (Math.abs(c - consts.C_EUTECTOID) < 0.02) micro = '100% Pearlite (Lamellar)';
+      else if (c < consts.C_EUTECTOID) micro = 'Proeutectoid Ferrite + Pearlite';
       else if (c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) micro = 'Proeutectoid Cementite Network + Pearlite';
       else if (Math.abs(c - CONSTANTS.FE_C.C_EUTECTIC) < 0.05) micro = 'Ledeburite (Eutectic)';
       else micro = 'Primary Cementite + Transformed Ledeburite';
@@ -364,7 +533,7 @@ const ThermoEngine = {
 
     return { 
       micro, crystal, paramA: a, paramC: c_param,
-      yield: Math.round(yieldStr), uts: Math.round(uts), hardness: convertHardness(hardness), 
+      yield: Math.round(yieldStr), uts: Math.round(uts), hardness: convertHardness(hv), 
       elong: Math.round(elong), grainSize: Math.round(grainSizeASTM * 10) / 10,
       fatigue: Math.round(fatigueLimit), dbtt: Math.round(dbtt)
     };
@@ -372,9 +541,168 @@ const ThermoEngine = {
 };
 
 // ============================================================================
+// MODULE: OPTIMIZATION ENGINE (NELDER-MEAD SIMPLEX)
+// ============================================================================
+const NelderMead = {
+  // Minimize f(x) where x = [c, mn, si, cr, ni, mo]
+  minimize: function(f, x0, options = {}) {
+    const { maxIter = 200, tol = 1e-4, alpha = 1, beta = 0.5, gamma = 2 } = options;
+    const n = x0.length;
+    
+    // Initialize simplex — n+1 vertices around starting point:
+    let simplex = [x0];
+    for (let i = 0; i < n; i++) {
+      const vertex = [...x0];
+      vertex[i] = x0[i] !== 0 ? x0[i] * 1.05 : 0.05;
+      simplex.push(vertex);
+    }
+    
+    const clampComposition = (x) => [
+      Math.max(0.01, Math.min(2.0, x[0])),  // C: 0.01–2.0%
+      Math.max(0.1,  Math.min(2.0, x[1])),  // Mn: 0.1–2.0%
+      Math.max(0.1,  Math.min(1.5, x[2])),  // Si: 0.1–1.5%
+      Math.max(0,    Math.min(5.0, x[3])),  // Cr: 0–5%
+      Math.max(0,    Math.min(4.0, x[4])),  // Ni: 0–4%
+      Math.max(0,    Math.min(1.0, x[5])),  // Mo: 0–1%
+    ];
+
+    for (let iter = 0; iter < maxIter; iter++) {
+      // Sort by function value:
+      simplex.sort((a, b) => f(a) - f(b));
+      
+      // Check convergence:
+      const fBest = f(simplex[0]);
+      const fWorst = f(simplex[n]);
+      if (Math.abs(fWorst - fBest) < tol) break;
+
+      // Centroid of best n points:
+      const centroid = x0.map((_, j) =>
+        simplex.slice(0, n).reduce((sum, v) => sum + v[j], 0) / n
+      );
+
+      // Reflection:
+      const xr = clampComposition(centroid.map((c, j) => c + alpha * (c - simplex[n][j])));
+      if (f(xr) < f(simplex[n-1]) && f(xr) >= f(simplex[0])) {
+        simplex[n] = xr;
+        continue;
+      }
+
+      // Expansion:
+      if (f(xr) < f(simplex[0])) {
+        const xe = clampComposition(centroid.map((c, j) => c + gamma * (xr[j] - c)));
+        simplex[n] = f(xe) < f(xr) ? xe : xr;
+        continue;
+      }
+
+      // Contraction:
+      const xc = clampComposition(centroid.map((c, j) => c + beta * (simplex[n][j] - c)));
+      if (f(xc) < f(simplex[n])) { simplex[n] = xc; continue; }
+
+      // Shrink:
+      for (let i = 1; i <= n; i++) {
+        simplex[i] = clampComposition(simplex[0].map((c, j) => c + beta * (simplex[i][j] - c)));
+      }
+    }
+    
+    const best = simplex[0];
+    return { c: best[0], mn: best[1], si: best[2], cr: best[3], ni: best[4], mo: best[5] };
+  }
+};
+
+const OptimizationEngine = {
+  runInverseDesign: function(targets, baseAlloy) {
+    let bestResults = [];
+    
+    const processes = [
+      { name: 'Annealed (Slow Cool)', rate: CONSTANTS.RATES.ANNEAL, mode: 'anneal' },
+      { name: 'Normalized (Air Cool)', rate: CONSTANTS.RATES.NORMALIZE, mode: 'normalize' },
+      { name: 'Quenched (Untempered)', rate: CONSTANTS.RATES.QUENCH, mode: 'quench' },
+      { name: 'Quenched & Tempered', rate: CONSTANTS.RATES.QUENCH, mode: 'temper' },
+      { name: 'Austempered (Bainitic)', rate: CONSTANTS.RATES.CRITICAL_BAINITE + 5, mode: 'manual' }
+    ];
+
+    const startingPoints = [
+      [0.20, 0.75, 0.25, 0.0, 0.0, 0.0],  // low carbon plain
+      [0.40, 0.85, 0.25, 1.0, 0.0, 0.2],  // Cr-Mo alloy steel
+      [0.95, 0.40, 0.25, 0.0, 0.0, 0.0],  // high carbon
+      [0.30, 1.50, 0.25, 0.0, 2.0, 0.0],  // Mn-Ni
+      [0.15, 0.75, 0.25, 0.5, 0.0, 0.5],  // low-C Mo alloy
+    ];
+
+    processes.forEach(proc => {
+      const maxRate = proc.mode === 'temper' ? CONSTANTS.RATES.QUENCH : proc.rate;
+      
+      const objectiveFunction = (x) => {
+        const testAlloy = { c: x[0], mn: x[1], si: x[2], cr: x[3], ni: x[4], mo: x[5], v: baseAlloy.v || 0, cu: baseAlloy.cu || 0 };
+        const state = ThermoEngine.getState(testAlloy, 20, 0, proc.mode, maxRate, 20);
+        
+        let loss = 0; let weightSum = 0;
+        
+        if (targets.hv.val > 0) {
+          loss += targets.hv.weight * Math.pow((state.hardness.hv - targets.hv.val) / targets.hv.val, 2);
+          weightSum += targets.hv.weight;
+        }
+        if (targets.yield.val > 0) {
+          loss += targets.yield.weight * Math.pow((state.yield - targets.yield.val) / targets.yield.val, 2);
+          weightSum += targets.yield.weight;
+        }
+        if (targets.uts.val > 0) {
+          loss += targets.uts.weight * Math.pow((state.uts - targets.uts.val) / targets.uts.val, 2);
+          weightSum += targets.uts.weight;
+        }
+        if (targets.elong.val > 0 && state.elong < targets.elong.val) {
+          loss += (targets.elong.weight * 3) * Math.pow((targets.elong.val - state.elong) / targets.elong.val, 2); // Heavy penalty for missing elongation
+          weightSum += targets.elong.weight;
+        }
+        
+        if (weightSum === 0) return 9999;
+        return loss / weightSum;
+      };
+
+      startingPoints.forEach(x0 => {
+        const composition = NelderMead.minimize(objectiveFunction, x0);
+        const testAlloy = { c: composition.c, mn: composition.mn, si: composition.si, cr: composition.cr, ni: composition.ni, mo: composition.mo, v: baseAlloy.v || 0, cu: baseAlloy.cu || 0 };
+        const state = ThermoEngine.getState(testAlloy, 20, 0, proc.mode, maxRate, 20);
+        const mse = objectiveFunction([composition.c, composition.mn, composition.si, composition.cr, composition.ni, composition.mo]);
+        
+        const rmse = Math.sqrt(mse);
+        let matchScore = Math.max(0, 100 * Math.exp(-rmse * 4)); 
+
+        bestResults.push({ alloy: testAlloy, process: proc.name, state: state, rmse: rmse, matchScore: matchScore, procMode: proc.mode });
+      });
+    });
+
+    bestResults.sort((a, b) => b.matchScore - a.matchScore);
+    
+    let distinctResults = [];
+    let seenConfigGroups = new Set();
+    
+    for (let res of bestResults) {
+        let configKey = `${Math.round(res.alloy.c * 5) / 5}_${res.process}`;
+        if (!seenConfigGroups.has(configKey)) {
+            seenConfigGroups.add(configKey);
+            distinctResults.push(res);
+        }
+        if (distinctResults.length >= 3) break;
+    }
+
+    return distinctResults;
+  }
+};
+
+// ============================================================================
 // MODULE: EXPORT ENGINE
 // ============================================================================
 const ExportEngine = {
+  downloadBlob: (content, type, filename) => {
+    const blob = new Blob([content], { type });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
+
   generateTXT: (alloy, temp, mode, state, weldStatus) => {
     const timestamp = new Date().toISOString();
     let fracStr = state.phaseFractions.map(f => `- ${f.name}: ${f.frac.toFixed(1)}%`).join('\n');
@@ -438,94 +766,6 @@ Notes            : ${weldStatus.desc}
       });
     }
     return content;
-  },
-
-  downloadBlob: (content, type, filename) => {
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); 
-    a.href = url; 
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-};
-
-// ============================================================================
-// MODULE: OPTIMIZATION ENGINE (INVERSE DESIGN)
-// ============================================================================
-const OptimizationEngine = {
-  runInverseDesign: function(targets, baseAlloy) {
-    let bestResults = [];
-    const cSteps = [];
-    for(let c=0.02; c<=1.50; c+=0.02) cSteps.push(c);
-    
-    const processes = [
-      { name: 'Annealed (Slow Cool)', rate: CONSTANTS.RATES.ANNEAL, mode: 'anneal' },
-      { name: 'Normalized (Air Cool)', rate: CONSTANTS.RATES.NORMALIZE, mode: 'normalize' },
-      { name: 'Quenched (Untempered)', rate: CONSTANTS.RATES.QUENCH, mode: 'quench' },
-      { name: 'Quenched & Tempered', rate: CONSTANTS.RATES.QUENCH, mode: 'temper' },
-      { name: 'Austempered (Bainitic)*', rate: CONSTANTS.RATES.CRITICAL_BAINITE + 5, mode: 'manual' }
-    ];
-
-    cSteps.forEach(c => {
-      let testAlloy = { ...baseAlloy, c: c };
-      processes.forEach(proc => {
-        const maxRate = proc.mode === 'temper' ? CONSTANTS.RATES.QUENCH : proc.rate;
-        const state = ThermoEngine.getState(testAlloy, 20, 0, proc.mode, maxRate, 20);
-        
-        let totalLoss = 0; let weightSum = 0;
-        
-        if (targets.hv.val > 0) {
-          const err = (state.hardness.hv - targets.hv.val) / targets.hv.val;
-          totalLoss += Math.pow(err, 2) * targets.hv.weight;
-          weightSum += targets.hv.weight;
-        }
-        if (targets.yield.val > 0) {
-          const err = (state.yield - targets.yield.val) / targets.yield.val;
-          totalLoss += Math.pow(err, 2) * targets.yield.weight;
-          weightSum += targets.yield.weight;
-        }
-        if (targets.uts.val > 0) {
-          const err = (state.uts - targets.uts.val) / targets.uts.val;
-          totalLoss += Math.pow(err, 2) * targets.uts.weight;
-          weightSum += targets.uts.weight;
-        }
-        if (targets.elong.val > 0) {
-          let err = 0;
-          if (state.elong < targets.elong.val) {
-             err = (targets.elong.val - state.elong) / targets.elong.val;
-             totalLoss += Math.pow(err, 2) * (targets.elong.weight * 2.0); 
-          }
-          weightSum += targets.elong.weight;
-        }
-        
-        if (weightSum === 0) return;
-        
-        const rmse = Math.sqrt(totalLoss / weightSum);
-        let matchScore = Math.max(0, 100 * Math.exp(-rmse * 4)); 
-
-        bestResults.push({ c: c, process: proc.name, state: state, rmse: rmse, matchScore: matchScore });
-      });
-    });
-
-    bestResults.sort((a, b) => b.matchScore - a.matchScore);
-    
-    let distinctResults = [];
-    let seenConfigGroups = new Set();
-    
-    for (let res of bestResults) {
-        let configKey = `${Math.round(res.c * 5) / 5}_${res.process}`;
-        if (!seenConfigGroups.has(configKey)) {
-            seenConfigGroups.add(configKey);
-            distinctResults.push(res);
-        }
-        if (distinctResults.length >= 3) break;
-    }
-
-    return distinctResults;
   }
 };
 
@@ -576,12 +816,22 @@ const useHeatTreatment = (temp, carbon, setTemp) => {
     if (mode === 'manual') {
       simRef.current.t = parseNum(temp, 20);
       simRef.current.c = parseNum(carbon, 0);
+      
+      // Physically, manually dragging the temp slider deep into the Austenite 
+      // region (past A1) wipes the previous heat treatment thermal history.
+      if (simRef.current.t >= CONSTANTS.FE_C.T_EUTECTOID) {
+         setMaxRate(0);
+      }
     }
   }, [temp, carbon, mode]);
 
   const changeMode = useCallback((newMode, keepHistory = false) => {
     if (newMode === 'manual' && !keepHistory) {
       setHistoryTrail([]);
+      setMaxRate(0);
+    }
+    // Hard reset max rate if initializing a slow, non-quench thermal procedure
+    if (['anneal', 'normalize'].includes(newMode)) {
       setMaxRate(0);
     }
     setMode(newMode);
@@ -671,8 +921,10 @@ const useHeatTreatment = (temp, carbon, setTemp) => {
   return { mode, changeMode, coolingRate, maxRate, historyTrail };
 };
 
-const useDiagramInteractions = (svgRef, carbon, temp, setCarbon, setTemp, changeMode, maxC, geometry) => {
+const useDiagramInteractions = (svgRef, alloy, carbon, temp, setCarbon, setTemp, changeMode, maxC, geometry) => {
   const [isDragging, setIsDragging] = useState(false);
+  
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
 
   const getCoords = useCallback((e) => {
     if (!svgRef.current) return { c: 0, t: 20 };
@@ -695,34 +947,34 @@ const useDiagramInteractions = (svgRef, carbon, temp, setCarbon, setTemp, change
     return { c: Math.max(0, Math.min(maxC, c)), t: Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, t)) };
   }, [svgRef, maxC, geometry]); 
 
-  const snapToCritical = (c, t) => {
+  const snapToCritical = useCallback((c, t) => {
       let snapC = c; let snapT = t;
-      if (Math.abs(c - CONSTANTS.FE_C.C_EUTECTOID) < 0.05) snapC = CONSTANTS.FE_C.C_EUTECTOID;
+      if (Math.abs(c - consts.C_EUTECTOID) < 0.05) snapC = consts.C_EUTECTOID;
       else if (Math.abs(c - CONSTANTS.FE_C.C_EUTECTIC) < 0.1) snapC = CONSTANTS.FE_C.C_EUTECTIC;
       else if (Math.abs(c - CONSTANTS.FE_C.C_AUSTENITE_MAX) < 0.05) snapC = CONSTANTS.FE_C.C_AUSTENITE_MAX;
       
-      if (Math.abs(t - CONSTANTS.FE_C.T_EUTECTOID) < 15) snapT = CONSTANTS.FE_C.T_EUTECTOID;
+      if (Math.abs(t - consts.T_EUTECTOID) < 15) snapT = consts.T_EUTECTOID;
       else if (Math.abs(t - CONSTANTS.FE_C.T_EUTECTIC) < 15) snapT = CONSTANTS.FE_C.T_EUTECTIC;
-      else if (c < CONSTANTS.FE_C.C_EUTECTOID) {
-          const dynamicA3Temp = CONSTANTS.FE_C.T_A3_PURE - (CONSTANTS.FE_C.T_A3_PURE - CONSTANTS.FE_C.T_EUTECTOID) * Math.pow(c / CONSTANTS.FE_C.C_EUTECTOID, 1/0.9); 
+      else if (c < consts.C_EUTECTOID) {
+          const dynamicA3Temp = consts.T_A3_PURE - (consts.T_A3_PURE - consts.T_EUTECTOID) * Math.pow(c / consts.C_EUTECTOID, 1/0.9); 
           if (Math.abs(t - dynamicA3Temp) < 15) snapT = dynamicA3Temp;
-      } else if (c >= CONSTANTS.FE_C.C_EUTECTOID && c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) {
-          const dynamicAcmTemp = CONSTANTS.FE_C.T_EUTECTOID + (CONSTANTS.FE_C.T_EUTECTIC - CONSTANTS.FE_C.T_EUTECTOID) * Math.pow((c - CONSTANTS.FE_C.C_EUTECTOID) / (CONSTANTS.FE_C.C_AUSTENITE_MAX - CONSTANTS.FE_C.C_EUTECTOID), 1/1.4);
+      } else if (c >= consts.C_EUTECTOID && c <= CONSTANTS.FE_C.C_AUSTENITE_MAX) {
+          const dynamicAcmTemp = consts.T_EUTECTOID + (CONSTANTS.FE_C.T_EUTECTIC - consts.T_EUTECTOID) * Math.pow((c - consts.C_EUTECTOID) / (CONSTANTS.FE_C.C_AUSTENITE_MAX - consts.C_EUTECTOID), 1/1.4);
           if (Math.abs(t - dynamicAcmTemp) < 15) snapT = dynamicAcmTemp;
-      } else if (Math.abs(t - CONSTANTS.FE_C.T_A3_PURE) < 15) snapT = CONSTANTS.FE_C.T_A3_PURE;
+      } else if (Math.abs(t - consts.T_A3_PURE) < 15) snapT = consts.T_A3_PURE;
       
       return { c: snapC, t: snapT };
-  };
+  }, [consts]);
 
   const updatePosition = useCallback((e, snap = false) => {
       let { c, t } = getCoords(e);
       if (snap) { const snapped = snapToCritical(c, t); c = snapped.c; t = snapped.t; }
       setCarbon(c.toFixed(3)); setTemp(Math.round(t).toString());
-  }, [getCoords, setCarbon, setTemp]);
+  }, [getCoords, snapToCritical, setCarbon, setTemp]);
 
   const onPointerDown = useCallback((e) => { 
     if(e.target.setPointerCapture && e.pointerId) e.target.setPointerCapture(e.pointerId); 
-    setIsDragging(true); changeMode('manual'); updatePosition(e, true); 
+    setIsDragging(true); changeMode('manual', true); updatePosition(e, true); 
   }, [updatePosition, changeMode]);
   
   const onPointerMove = useCallback((e) => { 
@@ -777,7 +1029,9 @@ const ThermoProvider = ({ children }) => {
   const currentT = parseNum(temp, 20);
   let effectiveLowestTemp = lowestTempRef.current;
   
-  if (currentT > CONSTANTS.FE_C.T_EUTECTOID) {
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
+
+  if (currentT > consts.T_EUTECTOID) {
       effectiveLowestTemp = currentT;
   } else {
       effectiveLowestTemp = Math.min(lowestTempRef.current, currentT);
@@ -788,18 +1042,19 @@ const ThermoProvider = ({ children }) => {
     const numTemp = currentT;
     const prevTemp = prevTempRef.current;
     prevTempRef.current = numTemp;
-    if ((prevTemp > CONSTANTS.FE_C.T_EUTECTOID && numTemp <= CONSTANTS.FE_C.T_EUTECTOID) || 
-        (prevTemp < CONSTANTS.FE_C.T_EUTECTOID && numTemp >= CONSTANTS.FE_C.T_EUTECTOID) ||
-        (prevTemp > CONSTANTS.FE_C.T_A3_PURE && numTemp <= CONSTANTS.FE_C.T_A3_PURE) ||
-        (prevTemp < CONSTANTS.FE_C.T_A3_PURE && numTemp >= CONSTANTS.FE_C.T_A3_PURE)) {
+    
+    if ((prevTemp > consts.T_EUTECTOID && numTemp <= consts.T_EUTECTOID) || 
+        (prevTemp < consts.T_EUTECTOID && numTemp >= consts.T_EUTECTOID) ||
+        (prevTemp > consts.T_A3_PURE && numTemp <= consts.T_A3_PURE) ||
+        (prevTemp < consts.T_A3_PURE && numTemp >= consts.T_A3_PURE)) {
         setPhaseFlash(true); setTimeout(() => setPhaseFlash(false), 300);
     }
-  }, [currentT, effectiveLowestTemp]);
+  }, [currentT, effectiveLowestTemp, consts]);
 
   const activeGrade = useMemo(() => STEEL_GRADES.find(g => Math.abs(g.c - alloy.c) < 0.01 && Math.abs(g.mn - alloy.mn) < 0.1 && Math.abs(g.cr - alloy.cr) < 0.1), [alloy]);
   const weldStatus = useMemo(() => getWeldability(alloy), [alloy, activeGrade]);
   
-  const simState = useMemo(() => ThermoEngine.getState(alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp), [alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp]);
+  const simState = useMemo(() => ThermoEngine.getState(alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp, historyTrail), [alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp, historyTrail]);
   
   const maxC = zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE;
   const geometry = useMemo(() => {
@@ -822,9 +1077,9 @@ const ThermoProvider = ({ children }) => {
   }), [isDark]);
 
   const handleAlloyChange = useCallback((elem, val) => {
-    changeMode('manual');
+    changeMode('manual', true);
     setAlloy(prev => ({...prev, [elem]: parseNum(val, 0)}));
-  }, [changeMode]);
+  }, [changeMode, setAlloy]);
 
   const stateValue = useMemo(() => ({
     alloy, carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending
@@ -832,7 +1087,7 @@ const ThermoProvider = ({ children }) => {
 
   const actionValue = useMemo(() => ({
     alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, startTransition
-  }), [alloy, isDark, zoomSteel, showWeldability, snapshots, etchant, mode, changeMode, maxC, geometry, theme, svgRef]);
+  }), [alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef]);
 
   return (
     <ThermoStateContext.Provider value={stateValue}>
@@ -973,6 +1228,8 @@ const WeldabilityOverlay = React.memo(() => {
 });
 
 const DiagramSkeleton = React.memo(() => {
+  const { alloy } = useThermoState();
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
   const { geometry, maxC, isDark, zoomSteel } = useThermoAction();
   const { mapX, mapY, m, w, h } = geometry;
   const strokeMain = isDark ? '#64748b' : '#cbd5e1';
@@ -980,6 +1237,10 @@ const DiagramSkeleton = React.memo(() => {
   const axisColor = isDark ? '#475569' : '#94a3b8';
   const highlightStroke = isDark ? '#38bdf8' : '#3b82f6';
   const textMain = isDark ? 'text-slate-100' : 'text-slate-900';
+
+  const dynamicA1 = consts.T_EUTECTOID;
+  const dynamicA3 = consts.T_A3_PURE;
+  const dynamicC1 = consts.C_EUTECTOID;
 
   const paths = useMemo(() => {
     const generateCurvePath = (fn, tStart, tEnd) => {
@@ -1000,12 +1261,12 @@ const DiagramSkeleton = React.memo(() => {
       solidus: generateCurvePath(ThermoEngine.c_solidus, PTS.PERI_G.t, PTS.EUTEC_G.t),
       liquidus: generateCurvePath(ThermoEngine.c_liquidus, PTS.PERI_L.t, PTS.EUTEC_L.t),
       lFe3C: generateCurvePath(ThermoEngine.c_l_fe3c, PTS.EUTEC_L.t, 1250),
-      a3: generateCurvePath(ThermoEngine.c_a3, PTS.G.t, PTS.EUTECTOID_G.t),
-      acm: generateCurvePath(ThermoEngine.c_acm, PTS.EUTEC_G.t, PTS.EUTECTOID_G.t),
-      alpha1: generateCurvePath(ThermoEngine.c_alpha, PTS.G.t, PTS.EUTECTOID_A.t),
-      alpha2: generateCurvePath(ThermoEngine.c_alpha, PTS.EUTECTOID_A.t, PTS.ROOM_A.t)
+      a3: generateCurvePath((t) => ThermoEngine.c_a3(t, consts), dynamicA3, dynamicA1),
+      acm: generateCurvePath((t) => ThermoEngine.c_acm(t, consts), PTS.EUTEC_G.t, dynamicA1),
+      alpha1: generateCurvePath((t) => ThermoEngine.c_alpha(t, consts), dynamicA3, dynamicA1),
+      alpha2: generateCurvePath((t) => ThermoEngine.c_alpha(t, consts), dynamicA1, PTS.ROOM_A.t)
     };
-  }, [mapX, mapY]);
+  }, [mapX, mapY, consts, dynamicA1, dynamicA3]);
 
   return (
     <>
@@ -1017,7 +1278,7 @@ const DiagramSkeleton = React.memo(() => {
       <g clipPath="url(#graphClip)">
         <clipPath id="graphClip"><rect x={m.left} y={m.top} width={geometry.innerW} height={geometry.innerH} /></clipPath>
         
-        <g className="phase-skeleton pointer-events-none" stroke={strokeMain} strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+        <g className="phase-skeleton pointer-events-none" stroke={strokeMain} strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'all 0.3s ease-out' }}>
           <path d={paths.periL} />
           <path d={paths.periS} />
           <path d={paths.periN1} />
@@ -1032,13 +1293,13 @@ const DiagramSkeleton = React.memo(() => {
 
           <line x1={mapX(PTS.PERI_S.c)} y1={mapY(PTS.PERI_S.t)} x2={mapX(PTS.PERI_L.c)} y2={mapY(PTS.PERI_L.t)} /> 
           <line x1={mapX(PTS.EUTEC_G.c)} y1={mapY(PTS.EUTEC_G.t)} x2={mapX(PTS.EUTEC_C.c)} y2={mapY(PTS.EUTEC_C.t)} /> 
-          <line x1={mapX(PTS.EUTECTOID_A.c)} y1={mapY(PTS.EUTECTOID_A.t)} x2={mapX(PTS.EUTECTOID_C.c)} y2={mapY(PTS.EUTECTOID_C.t)} /> 
+          <line x1={mapX(0)} y1={mapY(dynamicA1)} x2={mapX(PTS.EUTECTOID_C.c)} y2={mapY(dynamicA1)} /> 
           <line x1={mapX(0)} y1={mapY(0)} x2={mapX(0)} y2={mapY(PTS.MELT.t)} />
           {!zoomSteel && <line x1={mapX(PTS.EUTEC_C.c)} y1={mapY(0)} x2={mapX(PTS.EUTEC_C.c)} y2={mapY(1250)} />}
         </g>
 
         <g className="pointer-events-none" stroke="#ef4444" strokeWidth="2" strokeDasharray="6,4" opacity="0.6">
-          <line x1={mapX(0)} y1={mapY(CONSTANTS.FE_C.T_CURIE)} x2={mapX(CONSTANTS.FE_C.C_EUTECTOID)} y2={mapY(CONSTANTS.FE_C.T_CURIE)} />
+          <line x1={mapX(0)} y1={mapY(CONSTANTS.FE_C.T_CURIE)} x2={mapX(dynamicC1)} y2={mapY(CONSTANTS.FE_C.T_CURIE)} style={{ transition: 'all 0.3s ease-out' }} />
         </g>
         <g className="pointer-events-none" stroke="#3b82f6" strokeWidth="2" strokeDasharray="6,4" opacity="0.6">
           <line x1={mapX(CONSTANTS.FE_C.C_FERRITE_MAX)} y1={mapY(CONSTANTS.FE_C.T_A0)} x2={mapX(CONSTANTS.FE_C.C_CEMENTITE)} y2={mapY(CONSTANTS.FE_C.T_A0)} />
@@ -1047,22 +1308,22 @@ const DiagramSkeleton = React.memo(() => {
         <text x={mapX(0.38)} y={mapY(CONSTANTS.FE_C.T_CURIE) - 6} className={cn("text-[10px] font-bold pointer-events-none hidden md:block", isDark ? 'fill-red-400/80' : 'fill-red-500/80')} textAnchor="middle">768°C (A₂)</text>
         <text x={mapX(3.5)} y={mapY(CONSTANTS.FE_C.T_A0) - 6} className={cn("text-[10px] font-bold pointer-events-none hidden md:block", isDark ? 'fill-blue-400/80' : 'fill-blue-500/80')} textAnchor="middle">210°C (A₀)</text>
 
-        <g className="pointer-events-none" stroke={axisColor} strokeWidth="1" strokeDasharray="4,4" opacity="0.4">
-          <line x1={mapX(CONSTANTS.FE_C.C_EUTECTOID)} y1={mapY(CONSTANTS.FE_C.T_EUTECTOID)} x2={mapX(CONSTANTS.FE_C.C_EUTECTOID)} y2={h - m.bottom} />
+        <g className="pointer-events-none" stroke={axisColor} strokeWidth="1" strokeDasharray="4,4" opacity="0.4" style={{ transition: 'all 0.3s ease-out' }}>
+          <line x1={mapX(dynamicC1)} y1={mapY(dynamicA1)} x2={mapX(dynamicC1)} y2={h - m.bottom} />
           <line x1={mapX(CONSTANTS.FE_C.C_AUSTENITE_MAX)} y1={mapY(CONSTANTS.FE_C.T_EUTECTIC)} x2={mapX(CONSTANTS.FE_C.C_AUSTENITE_MAX)} y2={h - m.bottom} />
-          <line x1={mapX(CONSTANTS.FE_C.C_FERRITE_MAX)} y1={mapY(CONSTANTS.FE_C.T_EUTECTOID)} x2={mapX(CONSTANTS.FE_C.C_FERRITE_MAX)} y2={h - m.bottom} />
+          <line x1={mapX(CONSTANTS.FE_C.C_FERRITE_MAX)} y1={mapY(dynamicA1)} x2={mapX(CONSTANTS.FE_C.C_FERRITE_MAX)} y2={h - m.bottom} />
           {!zoomSteel && <line x1={mapX(CONSTANTS.FE_C.C_EUTECTIC)} y1={mapY(CONSTANTS.FE_C.T_EUTECTIC)} x2={mapX(CONSTANTS.FE_C.C_EUTECTIC)} y2={h - m.bottom} />}
         </g>
 
-        <g className={cn("text-[12px] font-bold pointer-events-none hidden md:block", isDark ? 'fill-slate-400' : 'fill-slate-500')} textAnchor="middle">
+        <g className={cn("text-[12px] font-bold pointer-events-none hidden md:block transition-all duration-300", isDark ? 'fill-slate-400' : 'fill-slate-500')} textAnchor="middle">
           <text x={mapX(1.0)} y={mapY(1000)}>austenite (γ)</text>
           <text x={mapX(0.01)} y={mapY(500)} textAnchor="start" fontSize="11">α</text>
-          <text x={mapX(0.25)} y={mapY(800)}>α + γ</text>
+          <text x={mapX(Math.max(0.05, dynamicC1 / 3))} y={mapY(dynamicA1 + 50)}>α + γ</text>
           <text x={mapX(0.04)} y={mapY(1460)} fontSize="10">δ</text>
           <text x={mapX(0.25)} y={mapY(1515)} fontSize="10">L + δ</text>
           <text x={mapX(0.08)} y={mapY(1440)} fontSize="10">γ + δ</text>
-          <text x={mapX(0.4)} y={mapY(400)}>α + pearlite</text>
-          <text x={mapX(1.4)} y={mapY(400)}>pearlite + Fe₃C</text>
+          <text x={mapX(dynamicC1 / 2)} y={mapY(400)}>α + pearlite</text>
+          <text x={mapX(dynamicC1 + (CONSTANTS.FE_C.C_AUSTENITE_MAX - dynamicC1)/2)} y={mapY(400)}>pearlite + Fe₃C</text>
           <text x={mapX(1.55)} y={mapY(850)}>γ + Fe₃C</text>
           <text x={mapX(1.4)} y={mapY(1350)}>L + γ</text>
           {!zoomSteel && (
@@ -1077,17 +1338,17 @@ const DiagramSkeleton = React.memo(() => {
           )}
         </g>
 
-        <g className={cn("text-[11px] font-black pointer-events-none", isDark ? 'fill-slate-500' : 'fill-slate-400')} textAnchor="middle">
-          <text x={mapX(0.45)} y={mapY(800) + 12} transform={`rotate(-40 ${mapX(0.45)} ${mapY(800) + 12})`} fill="#f97316">A₃</text>
+        <g className={cn("text-[11px] font-black pointer-events-none transition-all duration-300", isDark ? 'fill-slate-500' : 'fill-slate-400')} textAnchor="middle">
+          <text x={mapX(dynamicC1 / 1.5)} y={mapY(dynamicA3 - 100) + 12} transform={`rotate(-40 ${mapX(dynamicC1 / 1.5)} ${mapY(dynamicA3 - 100) + 12})`} fill="#f97316">A₃</text>
           <text x={mapX(1.6)} y={mapY(980) - 8} transform={`rotate(38 ${mapX(1.6)} ${mapY(980) - 8})`} fill="#8b5cf6">Acm</text>
-          <text x={mapX(1.0)} y={mapY(CONSTANTS.FE_C.T_EUTECTOID) + 14}>A₁ (727°C)</text>
+          <text x={mapX(1.0)} y={mapY(dynamicA1) + 14}>A₁ ({Math.round(dynamicA1)}°C)</text>
           {!zoomSteel && <text x={mapX(CONSTANTS.FE_C.C_EUTECTIC)} y={mapY(CONSTANTS.FE_C.T_EUTECTIC) - 8}>Eutectic (1147°C)</text>}
         </g>
       </g>
 
       <path className="pointer-events-none" d={`M ${m.left} ${m.top} L ${m.left} ${h - m.bottom} L ${w - m.right} ${h - m.bottom}`} fill="none" stroke={axisColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
 
-      <g className={cn("text-[12px] font-mono font-bold pointer-events-none", textMain)} textAnchor="middle">
+      <g className={cn("text-[12px] font-mono font-bold pointer-events-none transition-all duration-300", textMain)} textAnchor="middle">
         {(zoomSteel ? [0.5, 1.0, 1.5, 2.0, 2.5] : [1, 2, 3, 4, 5, 6]).map(c => (
           <g key={`tx-${c}`} transform={`translate(${mapX(c)}, ${h - m.bottom})`}>
             <line y2="6" stroke={axisColor} strokeWidth="2" />
@@ -1095,10 +1356,10 @@ const DiagramSkeleton = React.memo(() => {
           </g>
         ))}
         
-        {(zoomSteel ? [CONSTANTS.FE_C.C_FERRITE_MAX, CONSTANTS.FE_C.C_EUTECTOID, CONSTANTS.FE_C.C_AUSTENITE_MAX] : [CONSTANTS.FE_C.C_FERRITE_MAX, CONSTANTS.FE_C.C_EUTECTOID, CONSTANTS.FE_C.C_AUSTENITE_MAX, CONSTANTS.FE_C.C_EUTECTIC, CONSTANTS.FE_C.C_CEMENTITE]).map(c => (
+        {(zoomSteel ? [CONSTANTS.FE_C.C_FERRITE_MAX, dynamicC1, CONSTANTS.FE_C.C_AUSTENITE_MAX] : [CONSTANTS.FE_C.C_FERRITE_MAX, dynamicC1, CONSTANTS.FE_C.C_AUSTENITE_MAX, CONSTANTS.FE_C.C_EUTECTIC, CONSTANTS.FE_C.C_CEMENTITE]).map(c => (
           <g key={`ctx-${c}`} transform={`translate(${mapX(c)}, ${h - m.bottom})`}>
             <line y2="8" stroke={highlightStroke} strokeWidth="2" />
-            <text y="24" textAnchor={c === CONSTANTS.FE_C.C_FERRITE_MAX ? "start" : "middle"} dx={c === CONSTANTS.FE_C.C_FERRITE_MAX ? 3 : 0} className="fill-indigo-600 dark:fill-indigo-400 font-black text-[10px]">{c}</text>
+            <text y="24" textAnchor={c === CONSTANTS.FE_C.C_FERRITE_MAX ? "start" : "middle"} dx={c === CONSTANTS.FE_C.C_FERRITE_MAX ? 3 : 0} className="fill-indigo-600 dark:fill-indigo-400 font-black text-[10px]">{c.toFixed(2)}</text>
           </g>
         ))}
 
@@ -1126,10 +1387,10 @@ const DiagramSkeleton = React.memo(() => {
           </g>
         ))}
 
-        {[CONSTANTS.FE_C.T_EUTECTOID, CONSTANTS.FE_C.T_A3_PURE, CONSTANTS.FE_C.T_EUTECTIC, CONSTANTS.FE_C.T_GAMMA_MAX, CONSTANTS.FE_C.T_PERITECTIC, CONSTANTS.FE_C.T_MELT].map(t => (
+        {[dynamicA1, dynamicA3, CONSTANTS.FE_C.T_EUTECTIC, CONSTANTS.FE_C.T_GAMMA_MAX, CONSTANTS.FE_C.T_PERITECTIC, CONSTANTS.FE_C.T_MELT].map(t => (
           <g key={`cty-${t}`} transform={`translate(${m.left}, ${mapY(t)})`}>
             <line x2="-8" stroke={highlightStroke} strokeWidth="2" />
-            <text x="-14" y="4" textAnchor="end" className="fill-indigo-600 dark:fill-indigo-400 font-black text-[10px]">{t}</text>
+            <text x="-14" y="4" textAnchor="end" className="fill-indigo-600 dark:fill-indigo-400 font-black text-[10px]">{Math.round(t)}</text>
           </g>
         ))}
 
@@ -1353,7 +1614,8 @@ const PropertyGauge = React.memo(({ label, value, unit, max, colorClass }) => {
 });
 
 const CoolingCurvePlot = React.memo(() => {
-  const { historyTrail, temp } = useThermoState();
+  const { historyTrail, temp, alloy } = useThermoState();
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
   const { isDark, theme } = useThermoAction();
 
   const w = 320, h = 140;
@@ -1396,8 +1658,8 @@ const CoolingCurvePlot = React.memo(() => {
   const gridColor = isDark ? '#1e293b' : '#f1f5f9';
 
   const criticalLines = [
-    { t: CONSTANTS.FE_C.T_EUTECTOID, label: 'A₁', color: '#f43f5e' },
-    { t: CONSTANTS.FE_C.T_A3_PURE, label: 'A₃', color: '#f97316' },
+    { t: consts.T_EUTECTOID, label: 'A₁', color: '#f43f5e' },
+    { t: consts.T_A3_PURE, label: 'A₃', color: '#f97316' },
   ].filter(l => l.t >= minT && l.t <= maxT);
 
   if (trail.length < 2) {
@@ -1499,10 +1761,10 @@ const ControlsSection = () => {
 
   const [showAlloys, setShowAlloys] = useState(false);
 
-  const stepCarbon = (dir) => { changeMode('manual'); setCarbon(prev => Number(Math.max(0, Math.min(zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE, parseNum(prev, 0) + dir * 0.01)).toFixed(3)).toString()); };
-  const stepTemp = (dir) => { changeMode('manual'); setTemp(prev => Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, parseNum(prev, 0) + dir * 5)).toString()); };
-  const handleCarbonChange = (e) => { changeMode('manual'); const val = e.target.value; setCarbon(val); if (!isNaN(parseFloat(val)) && parseFloat(val) > 2.5 && zoomSteel) setZoomSteel(false); };
-  const handleTempChange = (e) => { changeMode('manual'); setTemp(e.target.value); };
+  const stepCarbon = (dir) => { changeMode('manual', true); setCarbon(prev => Number(Math.max(0, Math.min(zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE, parseNum(prev, 0) + dir * 0.01)).toFixed(3)).toString()); };
+  const stepTemp = (dir) => { changeMode('manual', true); setTemp(prev => Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, parseNum(prev, 0) + dir * 5)).toString()); };
+  const handleCarbonChange = (e) => { changeMode('manual', true); const val = e.target.value; setCarbon(val); if (!isNaN(parseFloat(val)) && parseFloat(val) > 2.5 && zoomSteel) setZoomSteel(false); };
+  const handleTempChange = (e) => { changeMode('manual', true); setTemp(e.target.value); };
 
   return (
     <section className={cn("backdrop-blur-xl border rounded-2xl p-6 shadow-xl shrink-0", theme.border, isDark ? 'bg-slate-900/50' : 'bg-white/80')}>
@@ -1515,7 +1777,7 @@ const ControlsSection = () => {
           {STEEL_GRADES.map((grade) => (
             <button 
               key={grade.name}
-              onClick={() => { setAlloy({ c: grade.c, mn: grade.mn, si: grade.si || 0.2, cr: grade.cr, mo: grade.mo, v: grade.v, ni: grade.ni, cu: grade.cu }); changeMode('manual'); if (grade.c > 2.5 && zoomSteel) setZoomSteel(false); }}
+              onClick={() => { setAlloy({ c: grade.c, mn: grade.mn, si: grade.si || 0.2, cr: grade.cr, mo: grade.mo, v: grade.v, ni: grade.ni, cu: grade.cu }); changeMode('manual', false); if (grade.c > 2.5 && zoomSteel) setZoomSteel(false); }}
               title={grade.desc}
               className={cn("px-3 py-2 rounded-lg text-xs font-bold transition-all border flex flex-col items-start gap-1 focus-visible:outline-none", Math.abs(parseNum(carbon, 0) - grade.c) < 0.01 && Math.abs(alloy.cr - grade.cr) < 0.1 ? 'bg-indigo-100 border-indigo-300 dark:bg-indigo-500/20 dark:border-indigo-500/50 shadow-inner' : 'bg-slate-50 border-slate-200 hover:bg-slate-100 dark:bg-slate-800/80 dark:border-slate-700 dark:hover:bg-slate-700')}
             >
@@ -1550,7 +1812,7 @@ const ControlsSection = () => {
           <div className="flex justify-between items-end">
             <label className="text-xs font-bold tracking-widest uppercase text-rose-500 dark:text-rose-400">Temperature (°C)</label>
             <div className="flex items-center gap-2">
-              <button onClick={() => { changeMode('manual'); setTemp("20"); }} className="text-[9px] font-bold uppercase tracking-wider text-rose-500 bg-rose-50 dark:bg-rose-500/10 px-2 py-1 rounded hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-colors">Room T</button>
+              <button onClick={() => { changeMode('manual', true); setTemp("20"); }} className="text-[9px] font-bold uppercase tracking-wider text-rose-500 bg-rose-50 dark:bg-rose-500/10 px-2 py-1 rounded hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-colors">Room T</button>
               <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
                 <button onClick={() => stepTemp(-1)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500"><Minus size={14} /></button>
                 <input type="number" step="1" min="0" max="1600" value={temp} onChange={handleTempChange} className={cn("w-16 text-center py-1 bg-transparent font-mono text-sm font-black focus:outline-none", theme.textMain)} />
@@ -1577,7 +1839,7 @@ const ControlsSection = () => {
               <Shield size={16} className="text-indigo-600 dark:text-indigo-400 mt-0.5 shrink-0" />
               <div>
                  <h4 className="text-[11px] font-black uppercase tracking-widest text-indigo-800 dark:text-indigo-300 mb-0.5">Alloy Space Navigator</h4>
-                 <p className="text-[10px] text-indigo-700 dark:text-indigo-400/80 font-medium leading-relaxed">Adjusting elements dynamically shifts the iso-weldability contours (Carbon Equivalent boundaries) across the phase diagram. Enable the <span className="font-bold border-b border-indigo-400/50 pb-0.5">Weldability Map</span> overlay in the Diagram view below to visualize this in real-time.</p>
+                 <p className="text-[10px] text-indigo-700 dark:text-indigo-400/80 font-medium leading-relaxed">Adjusting elements dynamically shifts the iso-weldability contours (Carbon Equivalent boundaries) across the phase diagram and alters the transformation kinetics ($M_s$, $B_s$).</p>
               </div>
            </div>
         </div>
@@ -1593,7 +1855,7 @@ const ControlsSection = () => {
             <button onClick={() => changeMode(mode === 'quench' ? 'manual' : 'quench')} className={cn("flex flex-1 md:flex-none items-center justify-center gap-1.5 px-4 py-2 rounded-xl font-bold text-xs tracking-wider uppercase transition-all shadow-sm", mode === 'quench' ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(147,51,234,0.5)] border-purple-500' : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-500/10 dark:text-purple-300 border border-purple-200 dark:border-purple-500/30')}>
               <Zap size={14} className={mode === 'quench' ? 'animate-pulse' : ''} /> Quench
             </button>
-            {maxRate >= CONSTANTS.RATES.CRITICAL_MARTENSITE && parseNum(temp, 20) <= CONSTANTS.FE_C.T_EUTECTOID && (
+            {maxRate >= CONSTANTS.RATES.CRITICAL_MARTENSITE && parseNum(temp, 20) <= consts.T_EUTECTOID && (
               <button onClick={() => changeMode(mode === 'temper' ? 'manual' : 'temper')} className={cn("flex flex-1 md:flex-none items-center justify-center gap-1.5 px-4 py-2 rounded-xl font-bold text-xs tracking-wider uppercase transition-all shadow-sm", mode === 'temper' ? 'bg-rose-500 text-white shadow-[0_0_15px_rgba(244,63,94,0.5)] border-rose-500' : 'bg-rose-50 text-rose-700 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30')}>
                 <RefreshCw size={14} className={mode === 'temper' ? 'animate-spin' : ''} /> Temper
               </button>
@@ -1630,7 +1892,7 @@ const TargetInput = React.memo(({ label, targetKey, placeholder, targets, setTar
 
 const InverseDesignSection = () => {
   const { alloy } = useThermoState();
-  const { setCarbon, setTemp, changeMode, theme, isDark } = useThermoAction();
+  const { setAlloy, setCarbon, setTemp, changeMode, theme, isDark } = useThermoAction();
   
   const [targets, setTargets] = useState({ 
     hv: { val: '', weight: 1 }, yield: { val: '', weight: 1 }, 
@@ -1650,19 +1912,24 @@ const InverseDesignSection = () => {
         elong: { val: parseFloat(targets.elong.val) || 0, weight: targets.elong.weight }
       };
       if (parsedTargets.hv.val === 0 && parsedTargets.yield.val === 0 && parsedTargets.uts.val === 0 && parsedTargets.elong.val === 0) { setIsOptimizing(false); return; }
+      
       const rawResults = OptimizationEngine.runInverseDesign(parsedTargets, alloy);
-      setResults(rawResults); setIsOptimizing(false);
-    }, 400);
+      setResults(rawResults); 
+      setIsOptimizing(false);
+    }, 100); // Shorter timeout, UI is updated before the heavy compute
   };
 
   const applyResult = (res) => {
-    changeMode('manual', false); setCarbon(res.c.toFixed(3)); setTemp("900"); 
+    changeMode('manual', false); 
+    setAlloy(res.alloy); // Set the full multi-dimensional composition
+    setCarbon(res.alloy.c.toFixed(3)); 
+    setTemp("900"); 
     setTimeout(() => {
         if (res.process.includes('Annealed')) changeMode('anneal');
         else if (res.process.includes('Normalized')) changeMode('normalize');
         else if (res.process.includes('Tempered')) changeMode('temper');
         else if (res.process.includes('Quenched')) changeMode('quench');
-        else { setTemp("20"); changeMode('manual'); }
+        else { setTemp("20"); changeMode('manual', false); }
     }, 500);
   };
 
@@ -1673,6 +1940,7 @@ const InverseDesignSection = () => {
           <h2 className="text-sm font-black tracking-widest uppercase flex items-center gap-2 bg-clip-text text-transparent bg-gradient-to-r from-emerald-500 to-indigo-500">
             <Wand2 size={16} className="text-emerald-500" /> Multi-Objective Inverse Design Engine
           </h2>
+          <p className={cn("text-[10px] mt-1 font-medium", theme.textMuted)}>Utilizing Nelder-Mead Simplex across 6-dimensional composition space.</p>
         </div>
         <button onClick={handleOptimize} disabled={isOptimizing} className={cn("px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-md flex items-center gap-2", isOptimizing ? 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-800 dark:text-slate-600' : 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-95')}>
           {isOptimizing ? <><Loader2 size={14} className="animate-spin" /> Solving...</> : <><Search size={14} /> Run Solver</>}
@@ -1692,17 +1960,27 @@ const InverseDesignSection = () => {
             {results.map((res, i) => (
               <div key={i} className={cn("p-4 rounded-xl border flex flex-col justify-between transition-all hover:shadow-lg", isDark ? 'bg-slate-800/40 border-slate-700' : 'bg-white border-slate-200')}>
                 <div>
-                  <div className="flex justify-between items-start mb-2">
+                  <div className="flex justify-between items-start mb-3">
                     <span className={cn("text-[10px] px-2 py-0.5 rounded font-black uppercase tracking-wider", res.matchScore > 85 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : res.matchScore > 60 ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20')}>
                       {res.matchScore.toFixed(1)}% Match
                     </span>
                     <span className={cn("text-[9px] uppercase tracking-widest font-bold opacity-60")}>Option {i+1}</span>
                   </div>
-                  <div className="my-4 space-y-1">
-                    <div className="flex justify-between items-center text-sm"><span className={cn("font-medium text-[11px]", theme.textMuted)}>Carbon Req:</span><span className="font-mono font-black">{res.c.toFixed(2)}% C</span></div>
-                    <div className="flex justify-between items-center text-sm"><span className={cn("font-medium text-[11px]", theme.textMuted)}>Process Route:</span><span className="font-black text-[11px] uppercase tracking-wider text-indigo-500 dark:text-indigo-400">{res.process}</span></div>
+                  <div className="my-4 space-y-2">
+                    <div className="flex flex-col gap-1">
+                       <span className={cn("font-medium text-[10px] uppercase tracking-widest", theme.textMuted)}>Alloy Requirement:</span>
+                       <span className="font-mono font-black text-xs leading-tight">
+                         {res.alloy.c.toFixed(2)}C {res.alloy.mn.toFixed(2)}Mn {res.alloy.si.toFixed(2)}Si 
+                         <br/>
+                         {res.alloy.cr>0.05 ? res.alloy.cr.toFixed(1)+'Cr ' : ''}{res.alloy.ni>0.05 ? res.alloy.ni.toFixed(1)+'Ni ' : ''}{res.alloy.mo>0.05 ? res.alloy.mo.toFixed(1)+'Mo' : ''}
+                       </span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm pt-2 border-t dark:border-slate-800 border-slate-100">
+                       <span className={cn("font-medium text-[10px] uppercase tracking-widest", theme.textMuted)}>Process:</span>
+                       <span className="font-black text-[10px] uppercase tracking-wider text-indigo-500 dark:text-indigo-400">{res.process}</span>
+                    </div>
                   </div>
-                  <div className={cn("p-2 rounded-lg border text-[10px] font-mono grid grid-cols-4 gap-1.5 text-center", isDark ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-50 border-slate-200')}>
+                  <div className={cn("p-2 rounded-lg border text-[10px] font-mono grid grid-cols-4 gap-1.5 text-center mt-4", isDark ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-50 border-slate-200')}>
                     <div><div className="opacity-50 font-sans mb-0.5 text-[8px]">HV</div><div className="font-bold text-[10px]">{res.state.hardness.hv}</div></div>
                     <div className="border-x dark:border-slate-800 border-slate-200"><div className="opacity-50 font-sans mb-0.5 text-[8px]">Yield</div><div className="font-bold text-[10px]">{res.state.yield}</div></div>
                     <div className="border-r dark:border-slate-800 border-slate-200"><div className="opacity-50 font-sans mb-0.5 text-[8px]">UTS</div><div className="font-bold text-[10px]">{res.state.uts}</div></div>
@@ -1720,9 +1998,9 @@ const InverseDesignSection = () => {
 };
 
 const DiagramSection = () => {
-  const { carbon, temp, historyTrail, simState } = useThermoState();
+  const { alloy, carbon, temp, historyTrail, simState } = useThermoState();
   const { svgRef, setCarbon, setTemp, changeMode, maxC, geometry, theme, isDark, showWeldability, setShowWeldability } = useThermoAction();
-  const { isDragging, onPointerDown, onPointerMove, onPointerUp } = useDiagramInteractions(svgRef, carbon, temp, setCarbon, setTemp, changeMode, maxC, geometry);
+  const { isDragging, onPointerDown, onPointerMove, onPointerUp } = useDiagramInteractions(svgRef, alloy, carbon, temp, setCarbon, setTemp, changeMode, maxC, geometry);
 
   const historyPointsStr = useMemo(() => {
     if (historyTrail.length < 2) return '';
@@ -1735,7 +2013,7 @@ const DiagramSection = () => {
     if (e.key === 'ArrowRight') newC = Math.min(maxC, newC + stepC); else if (e.key === 'ArrowLeft') newC = Math.max(0, newC - stepC);
     else if (e.key === 'ArrowUp') newT = Math.min(CONSTANTS.FE_C.T_MAX, newT + stepT); else if (e.key === 'ArrowDown') newT = Math.max(0, newT - stepT);
     else return;
-    e.preventDefault(); changeMode('manual'); setCarbon(newC.toFixed(3)); setTemp(Math.round(newT).toString());
+    e.preventDefault(); changeMode('manual', true); setCarbon(newC.toFixed(3)); setTemp(Math.round(newT).toString());
   };
 
   const tooltipW = 160;
@@ -1792,7 +2070,8 @@ const DiagramSection = () => {
 };
 
 const KineticsDiagramSection = () => {
-  const { carbon, temp, historyTrail, simState } = useThermoState();
+  const { carbon, temp, historyTrail, simState, alloy } = useThermoState();
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
   const { theme, isDark } = useThermoAction();
   const c = parseNum(carbon, 0);
   const currentT = parseNum(temp, 20);
@@ -1805,6 +2084,8 @@ const KineticsDiagramSection = () => {
   const innerW = w - m.left - m.right;
   const innerH = h - m.top - m.bottom;
   const minLog = -1; const maxLog = 5; const maxTemp = 900;
+  
+  const a1Temp = consts.T_EUTECTOID;
 
   const mapX = useCallback((time) => {
     const logT = Math.log10(Math.max(0.1, time));
@@ -1814,12 +2095,15 @@ const KineticsDiagramSection = () => {
   const mapY = useCallback((t) => m.top + Math.max(0, Math.min(1, 1 - t / maxTemp)) * innerH, [maxTemp, innerH, m.top]);
 
   const curves = useMemo(() => {
-    const cShift = Math.pow(Math.abs(c - 0.76), 1.2) * 1.5;
+    // Dynamic TTT shift representing physical Hardenability from Alloying elements
+    const alloyShift = (alloy?.mn || 0) * 1.5 + (alloy?.cr || 0) * 2.0 + (alloy?.ni || 0) * 0.5 + (alloy?.mo || 0) * 3.0;
+    const cShift = Math.pow(Math.abs(c - 0.76), 1.2) * 1.5 + alloyShift;
     const msTemp = simState.msTemp || 200;
+    
     const pStartPts = []; const pFinishPts = [];
     const bStartPts = []; const bFinishPts = [];
 
-    for (let t = 720; t >= Math.max(20, msTemp); t -= 2) {
+    for (let t = a1Temp - 5; t >= Math.max(20, msTemp); t -= 2) {
       if (t >= 480) {
         const pLogStart = 0.3 + cShift + Math.pow(Math.abs(t - 600) / 50, 2.2) * 0.6;
         const pLogFinish = pLogStart + 1.3 + Math.pow(Math.abs(t - 600) / 90, 2) * 0.4;
@@ -1844,7 +2128,7 @@ const KineticsDiagramSection = () => {
       ps: makePath(pStartPts), pf: makePath(pFinishPts), pFill: makeFill(pStartPts, pFinishPts),
       bs: makePath(bStartPts), bf: makePath(bFinishPts), bFill: makeFill(bStartPts, bFinishPts), msTemp 
     };
-  }, [c, mapX, mapY, simState.msTemp]);
+  }, [c, mapX, mapY, simState.msTemp, alloy, a1Temp]);
 
   const coolingPath = useMemo(() => {
     if (!historyTrail || historyTrail.length < 2) return '';
@@ -1914,8 +2198,8 @@ const KineticsDiagramSection = () => {
                 </g>
             )}
 
-            <line x1={m.left} y1={mapY(727)} x2={w-m.right} y2={mapY(727)} stroke="#f43f5e" strokeWidth="2" strokeDasharray="4,4" opacity="0.5"/>
-            <text x={m.left + 10} y={mapY(727) - 5} className="text-[10px] font-bold fill-rose-500 opacity-70">A1 (727°C)</text>
+            <line x1={m.left} y1={mapY(a1Temp)} x2={w-m.right} y2={mapY(a1Temp)} stroke="#f43f5e" strokeWidth="2" strokeDasharray="4,4" opacity="0.5"/>
+            <text x={m.left + 10} y={mapY(a1Temp) - 5} className="text-[10px] font-bold fill-rose-500 opacity-70">A1 ({Math.round(a1Temp)}°C)</text>
 
             <path d={curves.pFill} fill="#3b82f6" opacity={isDark ? "0.15" : "0.1"} />
             <path d={curves.bFill} fill="#10b981" opacity={isDark ? "0.15" : "0.1"} />
@@ -1986,7 +2270,7 @@ const SnapshotSection = () => {
   const { snapshots, setSnapshots, changeMode, setAlloy, setTemp, theme, isDark } = useThermoAction();
   
   const restoreSnapshot = useCallback((s) => {
-    changeMode('manual');
+    changeMode('manual', false);
     setAlloy(s.alloy || { c: s.c, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, v: 0, cu: 0 });
     setTemp(s.t.toString());
   }, [changeMode, setAlloy, setTemp]);
