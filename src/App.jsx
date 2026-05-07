@@ -2159,19 +2159,106 @@ const KineticsDiagramSection = () => {
   const [diagramMode, setDiagramMode] = useState('cct'); 
   const svgRef = useRef(null);
 
-  // ---> ADD THESE TWO NEW STATE VARIABLES <---
+  // --- ÚJ AI ÁLLAPOTOK (STATE) ---
   const [aiPredictions, setAiPredictions] = useState(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  // ---> ADD THIS NEW FUNCTION TO TRIGGER THE AI <---
+  // --- ÚJ AI PREDikciós FÜGGVÉNY ---
   const handleAIPrediction = async () => {
     setIsAiLoading(true);
+    // Feltételezve, hogy a MLKineticsEngine definiálva van fentebb
     const results = await MLKineticsEngine.predictTransformationTimes(alloy);
     setAiPredictions(results);
     setIsAiLoading(false);
   };
 
-// ... (keep w, h, m, innerW, innerH, mapX, mapY, curves, coolingPath, handlePointerMove logic) ...
+  // VISSZAÁLLÍTOTT VÁLTOZÓK (Ezek tűntek el!)
+  const w = 850, h = 400; const m = { top: 40, right: 60, bottom: 60, left: 70 };
+  const innerW = w - m.left - m.right; const innerH = h - m.top - m.bottom;
+  const minLog = -1; const maxLog = 5; const maxTemp = 900;
+  const a1Temp = consts.T_EUTECTOID;
+
+  const mapX = useCallback((time) => m.left + Math.max(0, Math.min(1, (Math.log10(Math.max(0.1, time)) - minLog) / (maxLog - minLog))) * innerW, [minLog, maxLog, innerW, m.left]);
+  const mapY = useCallback((t) => m.top + Math.max(0, Math.min(1, 1 - t / maxTemp)) * innerH, [maxTemp, innerH, m.top]);
+
+  const curves = useMemo(() => {
+    const alloyShift = (alloy?.mn || 0) * 1.5 + (alloy?.cr || 0) * 2.0 + (alloy?.ni || 0) * 0.5 + (alloy?.mo || 0) * 3.0;
+    const cShift = Math.pow(Math.abs(c - 0.76), 1.2) * 1.5 + alloyShift;
+    const msTemp = simState.msTemp || 200;
+    const isCCT = diagramMode === 'cct';
+    const timeLogShift = isCCT ? 0.6 : 0.0; const tempDrop = isCCT ? 35 : 0;
+
+    const getKinetics = (T) => {
+      let ps = Infinity, pf = Infinity, bs = Infinity, bf = Infinity;
+      const pUpper = a1Temp - tempDrop; const pLower = 200 - tempDrop;
+      if (T < pUpper && T > pLower) {
+        const cShape = 8000 / (Math.max(0.5, pUpper - T) * Math.max(0.5, T - pLower));
+        const logStart = -0.5 + cShift + cShape + Math.pow(Math.abs(T - (580 - tempDrop)) / 70, 2.5) + timeLogShift;
+        ps = Math.pow(10, Math.min(12, logStart)); pf = Math.pow(10, Math.min(12, logStart + 1.2 + cShape * 0.05));
+      }
+      const bUpper = Math.min(consts.T_bs, a1Temp - 10) - tempDrop; const bLower = Math.max(20, msTemp - 50) - tempDrop;
+      if (T < bUpper && T > bLower) {
+        const cShape = 4000 / (Math.max(0.5, bUpper - T) * Math.max(0.5, T - bLower));
+        const logStart = 0.5 + cShift + cShape + Math.pow(Math.abs(T - (400 - tempDrop)) / 60, 2) + timeLogShift;
+        bs = Math.pow(10, Math.min(12, logStart)); bf = Math.pow(10, Math.min(12, logStart + 1.5 + cShape * 0.05));
+      }
+      return { ps, pf, bs, bf };
+    };
+
+    const pS = []; const pF = []; const bS = []; const bF = [];
+    for (let t = a1Temp; t >= 10; t -= 2) {
+       const { ps, pf, bs, bf } = getKinetics(t);
+       if (ps < 1e7) { pS.push({x: mapX(ps), y: mapY(t)}); pF.push({x: mapX(pf), y: mapY(t)}); }
+       if (bs < 1e7) { bS.push({x: mapX(bs), y: mapY(t)}); bF.push({x: mapX(bf), y: mapY(t)}); }
+    }
+
+    let noseTime = Infinity; let noseTemp = 0;
+    for (let t = a1Temp; t >= msTemp; t -= 2) {
+       const minStart = Math.min(getKinetics(t).ps, getKinetics(t).bs);
+       if (minStart < noseTime) { noseTime = minStart; noseTemp = t; }
+    }
+    
+    let criticalRate = noseTime < Infinity ? ((a1Temp - noseTemp) / noseTime) * 1.5 : 0;
+    const fanLines = [];
+    if (isCCT) {
+       fanLines.push({ rate: criticalRate, isCritical: true, path: `M ${mapX(0.1)},${mapY(a1Temp)} L ${mapX(Math.max(0.1, (a1Temp - 20)/criticalRate))},${mapY(20)}`, xEnd: mapX(Math.max(0.1, (a1Temp - 20)/criticalRate)) });
+       [0.1, 1, 10, 100].forEach(rate => {
+          if (Math.abs(Math.log10(rate) - Math.log10(criticalRate)) > 0.3) fanLines.push({ rate, isCritical: false, path: `M ${mapX(0.1)},${mapY(a1Temp)} L ${mapX(Math.max(0.1, (a1Temp - 20)/rate))},${mapY(20)}`, xEnd: mapX(Math.max(0.1, (a1Temp - 20)/rate)) });
+       });
+    }
+
+    const mkP = (pts) => pts.length ? `M ${pts.map(p => `${p.x},${p.y}`).join(' L ')}` : '';
+    const mkF = (s, f) => (!s.length || !f.length) ? '' : `M ${s[0].x},${s[0].y} ` + s.slice(1).map(p => `L ${p.x},${p.y}`).join(' ') + ' ' + f.slice().reverse().map(p => `L ${p.x},${p.y}`).join(' ') + ' Z';
+
+    return { ps: mkP(pS), pf: mkP(pF), pFill: mkF(pS, pF), bs: mkP(bS), bf: mkP(bF), bFill: mkF(bS, bF), msTemp, criticalRate, fanLines };
+  }, [c, mapX, mapY, simState.msTemp, alloy, a1Temp, diagramMode, consts.T_bs]);
+
+  const coolingPath = useMemo(() => {
+    if (!historyTrail || historyTrail.length < 2) return '';
+    let startTime = historyTrail[0].time;
+    for(let i = 1; i < historyTrail.length; i++) { 
+      if(historyTrail[i].t < historyTrail[i-1].t && historyTrail[i-1].t >= a1Temp && historyTrail[i].t <= a1Temp) { 
+        startTime = historyTrail[i-1].time + ((historyTrail[i-1].t - a1Temp) / (historyTrail[i-1].t - historyTrail[i].t)) * (historyTrail[i].time - historyTrail[i-1].time); break; 
+      } 
+    }
+    if (startTime === historyTrail[0].time) { for(let i = 1; i < historyTrail.length; i++) { if(historyTrail[i].t < historyTrail[i-1].t) { startTime = historyTrail[i-1].time; break; } } }
+    let path = '';
+    historyTrail.forEach((p) => {
+      if (p.t > a1Temp) return; 
+      path += path === '' ? `M ${mapX(Math.max(0.1, p.time - startTime + 0.1))},${mapY(p.t)}` : ` L ${mapX(Math.max(0.1, p.time - startTime + 0.1))},${mapY(p.t)}`;
+    });
+    return path;
+  }, [historyTrail, mapX, mapY, a1Temp]);
+
+  const handlePointerMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    let cx = e.clientX; let cy = e.clientY;
+    if (e.touches && e.touches.length > 0) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+    const x = ((cx - rect.left) / rect.width) * w; const y = ((cy - rect.top) / rect.height) * h;
+    if (x >= m.left && x <= w - m.right && y >= m.top && y <= h - m.bottom) setHoverData({ x, y, time: Math.pow(10, minLog + ((x - m.left) / innerW) * (maxLog - minLog)), temp: maxTemp * (1 - (y - m.top) / innerH) });
+    else setHoverData(null);
+  };
 
   const axisColor = isDark ? '#94a3b8' : '#7C7665';
   const gridColor = isDark ? '#334155' : '#D5CFC1';
@@ -2186,7 +2273,7 @@ const KineticsDiagramSection = () => {
           </h2>
         </div>
         <div className="flex gap-2">
-           {/* ---> ADD THE AI BUTTON HERE NEXT TO TTT/CCT <--- */}
+           {/* --- AI PREDICT GOMB --- */}
            <button onClick={handleAIPrediction} disabled={isAiLoading} className={cn(isAiLoading ? 'bg-indigo-500/50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500', "text-white font-semibold font-display tracking-widest text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all")}>
              {isAiLoading ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} AI Predict
            </button>
@@ -2195,7 +2282,7 @@ const KineticsDiagramSection = () => {
         </div>
       </div>
 
-      {/* ---> ADD THIS NEW PREDICTION DISPLAY WIDGET <--- */}
+      {/* --- AI PREDIKCIÓS EREDMÉNYEK MEGJELENÍTÉSE --- */}
       {aiPredictions && (
         <div className={cn("mb-4 p-4 rounded-xl flex justify-around border", isDark ? 'bg-indigo-900/20 border-indigo-500/30' : 'bg-indigo-50 border-indigo-200')}>
            <div className="text-center">
@@ -2214,7 +2301,6 @@ const KineticsDiagramSection = () => {
       )}
 
       <div className="w-full overflow-x-auto custom-scrollbar">
-// ... (Keep your existing SVG diagram code exactly as it is) ...
          <svg ref={svgRef} width="100%" viewBox={`0 0 ${w} ${h}`} onPointerMove={handlePointerMove} onPointerLeave={() => setHoverData(null)} className={cn("w-full min-w-[600px] h-auto rounded-sm touch-none border cursor-crosshair", theme.diagramBgClass, theme.border)}>
             
             <defs>
