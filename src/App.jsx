@@ -1,11 +1,16 @@
 import React, { createContext, useContext, useState, useMemo, useEffect, useRef, useCallback, useTransition } from 'react';
 import { 
   Target, Layers, Zap, Search, Sun, Moon, 
-  // ... (keep all your existing lucide-react imports) ...
+  GraduationCap, MapPin, BookOpen, MousePointerClick, 
+  Beaker, Flame, Activity, Download, Camera, Plus, Minus, 
+  Shield, LineChart, FileSpreadsheet, Trash2, Lightbulb, 
+  AlertTriangle, Info, Database, Share2, Loader2,
+  RefreshCw, Crosshair, Image as ImageIcon, Magnet, Github, Link as LinkIcon, Wand2, Settings, ChevronDown, ChevronUp,
+  Compass, CheckCircle2, ChevronRight, X, PlayCircle, SkipForward, Undo2, Redo2,
   ChevronLeft
 } from 'lucide-react';
 
-// ---> ADD THESE TWO LINES HERE <---
+// ONNX AI Engine Imports
 import { InferenceSession, Tensor, env } from 'onnxruntime-web';
 env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
 
@@ -13,7 +18,7 @@ env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
 // MODULE: CONFIGURATION & CONSTANTS
 // ============================================================================
 const APP_VERSION = "v17.7 PRO (ABAJIS SteelLab)";
-// ...
+
 const CONSTANTS = {
   FE_C: {
     T_MAX: 1600, T_MELT: 1538, T_PERITECTIC: 1495, T_GAMMA_MAX: 1394, T_EUTECTIC: 1147,
