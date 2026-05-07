@@ -181,7 +181,7 @@ const MLKineticsEngine = {
       try {
         console.log("Loading AI Kinetics Engine...");
         // Ensure steellab_kinetics_model.onnx is inside your 'public' folder!
-        this.session = await InferenceSession.create('/steellab_kinetics_model.onnx');
+        this.session = await InferenceSession.create('./steellab_kinetics_model.onnx');
         this.isReady = true;
         console.log("AI Model Loaded Successfully!");
       } catch (err) {
