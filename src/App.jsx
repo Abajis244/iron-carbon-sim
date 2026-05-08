@@ -275,6 +275,7 @@ const KineticEngine = {
 export const MLMechanicsEngine = {
   session: null,
   isReady: false,
+  isRunning: false, // <-- NEW: Concurrency Lock
 
   init: async function() {
     if (!this.session) {
@@ -292,22 +293,27 @@ export const MLMechanicsEngine = {
   predictMechanics: async function(alloy, fractions) {
     if (!this.isReady) await this.init();
     if (!this.session) return null;
+    
+    // --- THE GUARDRAIL: If the AI is busy, drop the request ---
+    if (this.isRunning) return null; 
+    
+    this.isRunning = true; // Lock the session
 
     const { c=0, mn=0, si=0, cr=0, ni=0, mo=0 } = alloy;
     const { ferrite=0, pearlite=0, bainite=0, martensite=0 } = fractions;
 
-    // 10 Inputs exactly matching our Python training data
     const inputData = Float32Array.from([
       c, mn, si, cr, ni, mo, 
-      ferrite/100, pearlite/100, bainite/100, martensite/100 // Convert % back to fractions
+      ferrite/100, pearlite/100, bainite/100, martensite/100 
     ]);
     const inputTensor = new Tensor('float32', inputData, [1, 10]);
 
     try {
       const results = await this.session.run({ float_input: inputTensor });
-      const outputData = results[this.session.outputNames[0]].data;
+      
+      this.isRunning = false; // Unlock the session as soon as it finishes
 
-      // Outputs match: Yield_MPa, UTS_MPa, Hardness_HV, Elongation_Pct
+      const outputData = results[this.session.outputNames[0]].data;
       return {
         yield: Math.round(outputData[0]),
         uts: Math.round(outputData[1]),
@@ -315,6 +321,7 @@ export const MLMechanicsEngine = {
         elongation: Math.round(outputData[3] * 10) / 10
       };
     } catch (err) {
+      this.isRunning = false; // Unlock on error to prevent freezing
       console.error("Mechanics Inference Error:", err);
       return null;
     }
@@ -2523,14 +2530,14 @@ const TelemetrySection = () => {
   const [aiMechanics, setAiMechanics] = useState(null);
   const [isMechanicsLoading, setIsMechanicsLoading] = useState(false);
 
-  // --- NEW: USE EFFECT TO TRIGGER AI ---
+  // --- NEW: USE EFFECT TO TRIGGER AI (WITH DEBOUNCER) ---
   useEffect(() => {
     let isMounted = true;
+    let timeoutId;
 
     const runMechanicsAI = async () => {
-      // THE GUARDRAIL: Do not use AI if Carbon is outside training bounds ( > 1.5% )
       if (alloy.c > 1.5) {
-         if (isMounted) setAiMechanics(null); // Fallback to math engine
+         if (isMounted) setAiMechanics(null); 
          return;
       }
 
@@ -2546,15 +2553,23 @@ const TelemetrySection = () => {
 
       const results = await MLMechanicsEngine.predictMechanics(alloy, fractions);
 
+      // Only update if we actually got results (didn't hit the concurrency lock)
       if (isMounted && results) {
         setAiMechanics(results);
       }
       if (isMounted) setIsMechanicsLoading(false);
     };
 
-    runMechanicsAI();
+    // THE DEBOUNCER: Wait 150ms after the last slider movement before firing the AI
+    timeoutId = setTimeout(() => {
+       runMechanicsAI();
+    }, 150);
 
-    return () => { isMounted = false; };
+    // CLEANUP: If the slider moves again before 150ms is up, cancel the previous request
+    return () => { 
+       isMounted = false; 
+       clearTimeout(timeoutId); 
+    };
   }, [alloy, simState.microFractions]);
 
   const takeSnapshot = useCallback(() => { 
