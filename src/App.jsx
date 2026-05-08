@@ -572,6 +572,15 @@ const ThermoEngine = {
     if (microState.isBainitic) dbtt -= 20; 
     if (microState.isTempered) dbtt -= 50; 
 
+    // ---> NEW: CAST IRON OVERRIDE PHYSICS <---
+    if (c > CONSTANTS.FE_C.C_AUSTENITE_MAX) { // If Carbon > 2.11%
+        elong = Math.max(0.1, elong * 0.05); 
+        uts = Math.min(uts, Math.max(yieldStr, 400)); 
+        hv = Math.max(hv, 400 + ((c - CONSTANTS.FE_C.C_AUSTENITE_MAX) * 80));
+        dbtt = Math.max(dbtt, 200); 
+    }
+    // -----------------------------------------
+
     let crystal = 'Mixed'; let a = 2.866, c_param = 2.866; 
     if (fGamma > 0.5 || microState.isMetastable) { crystal = 'FCC'; a = 3.56 + 0.03 * c; c_param = a; }
     else if (microState.isQuenched && (microState.martensiteFrac > 0.5 || fMart > 0.5)) { crystal = 'BCT'; a = 2.866 - 0.013 * c; c_param = 2.866 + 0.116 * c; }
@@ -2519,29 +2528,30 @@ const TelemetrySection = () => {
     let isMounted = true;
 
     const runMechanicsAI = async () => {
+      // THE GUARDRAIL: Do not use AI if Carbon is outside training bounds ( > 1.5% )
+      if (alloy.c > 1.5) {
+         if (isMounted) setAiMechanics(null); // Fallback to math engine
+         return;
+      }
+
       setIsMechanicsLoading(true);
 
-      // 1. Extract the exact fractions the AI was trained on from simState
       const getFrac = (name) => simState.microFractions.find(f => f.name.includes(name))?.frac || 0;
-      
       const fractions = {
-        ferrite: getFrac('Ferrite') + getFrac('Delta'), // Combine ferrites if necessary
+        ferrite: getFrac('Ferrite') + getFrac('Delta'),
         pearlite: getFrac('Pearlite'),
         bainite: getFrac('Bainite'),
-        martensite: getFrac('Martensite') + getFrac('Tempered') // Include tempered martensite
+        martensite: getFrac('Martensite') + getFrac('Tempered') 
       };
 
-      // 2. Call the AI Engine
       const results = await MLMechanicsEngine.predictMechanics(alloy, fractions);
 
-      // 3. Update the UI securely
       if (isMounted && results) {
         setAiMechanics(results);
       }
       if (isMounted) setIsMechanicsLoading(false);
     };
 
-    // Run the AI every time the alloy or the microstructural fractions change
     runMechanicsAI();
 
     return () => { isMounted = false; };
