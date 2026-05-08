@@ -219,7 +219,6 @@ const MLKineticsEngine = {
   }
 };
 
-
 const KineticEngine = {
   avrami: (t, k, n) => 1 - Math.exp(-k * Math.pow(Math.max(0, t), n)),
   pearliteStartTime: (T, alloy, consts) => {
@@ -270,6 +269,55 @@ const KineticEngine = {
       pearliteStarted: pearliteSum >= 1,
       bainiteStarted: bainiteSum >= 1
     };
+  }
+};
+
+export const MLMechanicsEngine = {
+  session: null,
+  isReady: false,
+
+  init: async function() {
+    if (!this.session) {
+      try {
+        console.log("Loading AI Mechanics Engine...");
+        this.session = await InferenceSession.create('./steellab_mechanical_model.onnx');
+        this.isReady = true;
+        console.log("AI Mechanics Model Loaded Successfully!");
+      } catch (err) {
+        console.error("Failed to load Mechanics ONNX model:", err);
+      }
+    }
+  },
+
+  predictMechanics: async function(alloy, fractions) {
+    if (!this.isReady) await this.init();
+    if (!this.session) return null;
+
+    const { c=0, mn=0, si=0, cr=0, ni=0, mo=0 } = alloy;
+    const { ferrite=0, pearlite=0, bainite=0, martensite=0 } = fractions;
+
+    // 10 Inputs exactly matching our Python training data
+    const inputData = Float32Array.from([
+      c, mn, si, cr, ni, mo, 
+      ferrite/100, pearlite/100, bainite/100, martensite/100 // Convert % back to fractions
+    ]);
+    const inputTensor = new Tensor('float32', inputData, [1, 10]);
+
+    try {
+      const results = await this.session.run({ float_input: inputTensor });
+      const outputData = results[this.session.outputNames[0]].data;
+
+      // Outputs match: Yield_MPa, UTS_MPa, Hardness_HV, Elongation_Pct
+      return {
+        yield: Math.round(outputData[0]),
+        uts: Math.round(outputData[1]),
+        hardness: Math.round(outputData[2]),
+        elongation: Math.round(outputData[3] * 10) / 10
+      };
+    } catch (err) {
+      console.error("Mechanics Inference Error:", err);
+      return null;
+    }
   }
 };
 
@@ -2462,11 +2510,49 @@ const TelemetrySection = () => {
   const { colors } = theme;
   const [captureMsg, triggerCapture] = useEphemeralMessage(3000);
 
+  // --- NEW: AI MECHANICS STATE ---
+  const [aiMechanics, setAiMechanics] = useState(null);
+  const [isMechanicsLoading, setIsMechanicsLoading] = useState(false);
+
+  // --- NEW: USE EFFECT TO TRIGGER AI ---
+  useEffect(() => {
+    let isMounted = true;
+
+    const runMechanicsAI = async () => {
+      setIsMechanicsLoading(true);
+
+      // 1. Extract the exact fractions the AI was trained on from simState
+      const getFrac = (name) => simState.microFractions.find(f => f.name.includes(name))?.frac || 0;
+      
+      const fractions = {
+        ferrite: getFrac('Ferrite') + getFrac('Delta'), // Combine ferrites if necessary
+        pearlite: getFrac('Pearlite'),
+        bainite: getFrac('Bainite'),
+        martensite: getFrac('Martensite') + getFrac('Tempered') // Include tempered martensite
+      };
+
+      // 2. Call the AI Engine
+      const results = await MLMechanicsEngine.predictMechanics(alloy, fractions);
+
+      // 3. Update the UI securely
+      if (isMounted && results) {
+        setAiMechanics(results);
+      }
+      if (isMounted) setIsMechanicsLoading(false);
+    };
+
+    // Run the AI every time the alloy or the microstructural fractions change
+    runMechanicsAI();
+
+    return () => { isMounted = false; };
+  }, [alloy, simState.microFractions]);
+
   const takeSnapshot = useCallback(() => { 
     setSnapshots(prev => [...prev.slice(-19), { id: Date.now(), alloy: { ...alloy }, c: parseNum(carbon, 0), t: parseNum(temp, 0), mode: mode, state: { ...simState } }]); 
     triggerCapture(); 
   }, [alloy, carbon, temp, mode, simState, setSnapshots, triggerCapture]);
 
+  // Restored full download logic
   const downloadSVG = useCallback(() => {
     if (!svgRef.current) return;
     const svgClone = svgRef.current.cloneNode(true);
@@ -2482,6 +2568,12 @@ const TelemetrySection = () => {
 
   const highlightClass = isTourActive && TOUR_STEPS[tourStep].target === 'telemetry' ? "ring-2 ring-emerald-500 z-50 transform scale-[1.01]" : "";
 
+  // --- Determine which values to show (AI preferred, fallback to Math) ---
+  const displayYield = aiMechanics?.yield ?? simState.yield;
+  const displayHardness = aiMechanics?.hardness ?? simState.hardness.hv;
+  const displayUTS = aiMechanics?.uts ?? simState.uts;
+  const displayElongation = aiMechanics?.elongation ?? simState.elong;
+
   return (
     <section className={cn("border rounded-2xl flex flex-col xl:h-full overflow-hidden relative transition-all duration-300", theme.panelBg, highlightClass)}>
       
@@ -2489,6 +2581,9 @@ const TelemetrySection = () => {
         <div className="flex items-center gap-2">
           <Activity size={16} className={theme.textMuted} />
           <h2 className="font-display text-[16px] tracking-widest uppercase font-semibold">TELEMETRY</h2>
+          {/* Show a tiny AI indicator when it is active */}
+          {aiMechanics && !isMechanicsLoading && <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] bg-indigo-500/20 text-indigo-500 font-bold border border-indigo-500/30">AI ENHANCED</span>}
+          {isMechanicsLoading && <Loader2 size={12} className="ml-2 animate-spin text-indigo-500" />}
         </div>
         <div className="flex items-center gap-1">
           <div className={cn("flex border rounded-md overflow-hidden", isDark ? 'border-[#2a2d35]' : 'border-[#D1CCC0]')}>
@@ -2548,14 +2643,16 @@ const TelemetrySection = () => {
         
         {/* BENTO BOX TIER 2: GAUGES */}
         <div className="grid grid-cols-2 gap-4">
-           <InstrumentGauge label="Yield Strength" value={simState.yield} unit="MPa" max={2500} colorHex="#3b82f6" isDark={isDark} />
-           <InstrumentGauge label="Hardness" value={simState.hardness.hv} unit="HV" max={1000} colorHex="#a855f7" isDark={isDark} />
+           {/* Update these to use the display values! */}
+           <InstrumentGauge label="Yield Strength" value={displayYield} unit="MPa" max={2500} colorHex={isMechanicsLoading ? "#94a3b8" : "#3b82f6"} isDark={isDark} />
+           <InstrumentGauge label="Hardness" value={displayHardness} unit="HV" max={1000} colorHex={isMechanicsLoading ? "#94a3b8" : "#a855f7"} isDark={isDark} />
         </div>
 
         {/* BENTO BOX TIER 3: TERTIARY READOUTS */}
         <div className="grid grid-cols-2 gap-4">
-           <CompactStat label="Ult. Tensile" val={simState.uts} unit="MPa" colorHex="#f59e0b" isDark={isDark} />
-           <CompactStat label="Elongation" val={simState.elong} unit="%" colorHex="#10b981" isDark={isDark} />
+           {/* Update these to use the display values! */}
+           <CompactStat label="Ult. Tensile" val={displayUTS} unit="MPa" colorHex={isMechanicsLoading ? "#94a3b8" : "#f59e0b"} isDark={isDark} />
+           <CompactStat label="Elongation" val={displayElongation} unit="%" colorHex={isMechanicsLoading ? "#94a3b8" : "#10b981"} isDark={isDark} />
         </div>
 
         {/* BENTO BOX TIER 4: DEEP DIVE BUTTON */}
