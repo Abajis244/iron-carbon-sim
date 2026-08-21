@@ -9,7 +9,6 @@ import {
   Compass, CheckCircle2, ChevronRight, X, PlayCircle, SkipForward, Undo2, Redo2,
   ChevronLeft
 } from 'lucide-react';
-
 // ONNX AI Engine Imports
 import { InferenceSession, Tensor, env } from 'onnxruntime-web';
 env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
@@ -168,11 +167,10 @@ const generateVoronoi = (seed, w, h, numPoints = 40) => {
 };
 
 // ============================================================================
-// MODULE: THERMODYNAMIC & KINETIC ENGINE
+// MODULE: ARTIFICIAL INTELLIGENCE ENGINES (ONNX)
 // ============================================================================
 
-// ---> INSERT THE AI ENGINE HERE <---
-const MLKineticsEngine = {
+export const MLKineticsEngine = {
   session: null,
   isReady: false,
 
@@ -180,13 +178,9 @@ const MLKineticsEngine = {
     if (!this.session) {
       try {
         console.log("Loading AI Kinetics Engine...");
-        // Ensure steellab_kinetics_model.onnx is inside your 'public' folder!
         this.session = await InferenceSession.create('./steellab_kinetics_model.onnx');
         this.isReady = true;
-        console.log("AI Model Loaded Successfully!");
-      } catch (err) {
-        console.error("Failed to load ONNX model. Check if it is in the public folder.", err);
-      }
+      } catch (err) { console.error("Kinetics ONNX Error.", err); }
     }
   },
 
@@ -195,29 +189,74 @@ const MLKineticsEngine = {
     if (!this.session) return null;
 
     const { c=0, mn=0, si=0, cr=0, ni=0, mo=0 } = alloy;
-
-    // Convert alloy object into a flat array of floats for the AI
     const inputData = Float32Array.from([c, mn, si, cr, ni, mo]);
     const inputTensor = new Tensor('float32', inputData, [1, 6]);
 
-    const feeds = { float_input: inputTensor };
-
     try {
-      const results = await this.session.run(feeds);
-      const outputName = this.session.outputNames[0];
-      const outputData = results[outputName].data;
+      const results = await this.session.run({ float_input: inputTensor });
+      const outputData = results[this.session.outputNames[0]].data;
 
+      // Log10 conversion back to actual seconds
       return {
         tauFerrite: Math.pow(10, outputData[0]),
         tauPearlite: Math.pow(10, outputData[1]),
         tauBainite: Math.pow(10, outputData[2])
       };
+    } catch (err) { return null; }
+  }
+};
+
+export const MLMechanicsEngine = {
+  session: null,
+  isReady: false,
+  isRunning: false, // Prevents crashing on fast slider dragging
+
+  init: async function() {
+    if (!this.session) {
+      try {
+        console.log("Loading AI Mechanics Engine...");
+        this.session = await InferenceSession.create('./steellab_mechanical_model.onnx');
+        this.isReady = true;
+      } catch (err) { console.error("Mechanics ONNX Error:", err); }
+    }
+  },
+
+  predictMechanics: async function(alloy, fractions) {
+    if (!this.isReady) await this.init();
+    if (!this.session || this.isRunning) return null; 
+    
+    this.isRunning = true; 
+
+    const { c=0, mn=0, si=0, cr=0, ni=0, mo=0 } = alloy;
+    const { ferrite=0, pearlite=0, bainite=0, martensite=0 } = fractions;
+
+    const inputData = Float32Array.from([
+      c, mn, si, cr, ni, mo, 
+      ferrite/100, pearlite/100, bainite/100, martensite/100 
+    ]);
+    const inputTensor = new Tensor('float32', inputData, [1, 10]);
+
+    try {
+      const results = await this.session.run({ float_input: inputTensor });
+      this.isRunning = false; 
+
+      const outputData = results[this.session.outputNames[0]].data;
+      return {
+        yield: Math.round(outputData[0]),
+        uts: Math.round(outputData[1]),
+        hardness: Math.round(outputData[2]),
+        elongation: Math.round(outputData[3] * 10) / 10
+      };
     } catch (err) {
-      console.error("Inference Error:", err);
+      this.isRunning = false; 
       return null;
     }
   }
 };
+
+// ============================================================================
+// MODULE: THERMODYNAMIC & KINETIC ENGINE
+// ============================================================================
 
 const KineticEngine = {
   avrami: (t, k, n) => 1 - Math.exp(-k * Math.pow(Math.max(0, t), n)),
@@ -269,62 +308,6 @@ const KineticEngine = {
       pearliteStarted: pearliteSum >= 1,
       bainiteStarted: bainiteSum >= 1
     };
-  }
-};
-
-export const MLMechanicsEngine = {
-  session: null,
-  isReady: false,
-  isRunning: false, // <-- NEW: Concurrency Lock
-
-  init: async function() {
-    if (!this.session) {
-      try {
-        console.log("Loading AI Mechanics Engine...");
-        this.session = await InferenceSession.create('./steellab_mechanical_model.onnx');
-        this.isReady = true;
-        console.log("AI Mechanics Model Loaded Successfully!");
-      } catch (err) {
-        console.error("Failed to load Mechanics ONNX model:", err);
-      }
-    }
-  },
-
-  predictMechanics: async function(alloy, fractions) {
-    if (!this.isReady) await this.init();
-    if (!this.session) return null;
-    
-    // --- THE GUARDRAIL: If the AI is busy, drop the request ---
-    if (this.isRunning) return null; 
-    
-    this.isRunning = true; // Lock the session
-
-    const { c=0, mn=0, si=0, cr=0, ni=0, mo=0 } = alloy;
-    const { ferrite=0, pearlite=0, bainite=0, martensite=0 } = fractions;
-
-    const inputData = Float32Array.from([
-      c, mn, si, cr, ni, mo, 
-      ferrite/100, pearlite/100, bainite/100, martensite/100 
-    ]);
-    const inputTensor = new Tensor('float32', inputData, [1, 10]);
-
-    try {
-      const results = await this.session.run({ float_input: inputTensor });
-      
-      this.isRunning = false; // Unlock the session as soon as it finishes
-
-      const outputData = results[this.session.outputNames[0]].data;
-      return {
-        yield: Math.round(outputData[0]),
-        uts: Math.round(outputData[1]),
-        hardness: Math.round(outputData[2]),
-        elongation: Math.round(outputData[3] * 10) / 10
-      };
-    } catch (err) {
-      this.isRunning = false; // Unlock on error to prevent freezing
-      console.error("Mechanics Inference Error:", err);
-      return null;
-    }
   }
 };
 
@@ -578,15 +561,13 @@ const ThermoEngine = {
     if (microState.isQuenched) dbtt += 150; 
     if (microState.isBainitic) dbtt -= 20; 
     if (microState.isTempered) dbtt -= 50; 
-
-    // ---> NEW: CAST IRON OVERRIDE PHYSICS <---
+    // CAST IRON OVERRIDE PHYSICS
     if (c > CONSTANTS.FE_C.C_AUSTENITE_MAX) { // If Carbon > 2.11%
         elong = Math.max(0.1, elong * 0.05); 
         uts = Math.min(uts, Math.max(yieldStr, 400)); 
         hv = Math.max(hv, 400 + ((c - CONSTANTS.FE_C.C_AUSTENITE_MAX) * 80));
         dbtt = Math.max(dbtt, 200); 
     }
-    // -----------------------------------------
 
     let crystal = 'Mixed'; let a = 2.866, c_param = 2.866; 
     if (fGamma > 0.5 || microState.isMetastable) { crystal = 'FCC'; a = 3.56 + 0.03 * c; c_param = a; }
@@ -1288,9 +1269,11 @@ const DiagramSkeleton = React.memo(() => {
           <line x1={mapX(0)} y1={mapY(CONSTANTS.FE_C.T_CURIE)} x2={mapX(dynamicC1)} y2={mapY(CONSTANTS.FE_C.T_CURIE)} />
         </g>
         
-        <text x={mapX(0.38)} y={mapY(CONSTANTS.FE_C.T_CURIE) - 4} className={cn("font-data text-[10px] pointer-events-none hidden md:block", isDark ? 'fill-red-400' : 'fill-red-600/80')} textAnchor="middle">768°C (A₂)</text>
+        {/* FIX 1: Removed 'hidden md:block' from this line */}
+        <text x={mapX(0.38)} y={mapY(CONSTANTS.FE_C.T_CURIE) - 4} className={cn("font-data text-[10px] pointer-events-none", isDark ? 'fill-red-400' : 'fill-red-600/80')} textAnchor="middle">768°C (A₂)</text>
 
-        <g className={cn("font-display text-[14px] pointer-events-none hidden md:block transition-all duration-300")} textAnchor="middle">
+        {/* FIX 2: Removed 'hidden md:block' from this line */}
+        <g className={cn("font-display text-[14px] pointer-events-none transition-all duration-300")} textAnchor="middle">
           <text x={mapX(1.0)} y={mapY(1000)} fill={colors.austenite}>AUSTENITE (γ)</text>
           <text x={mapX(0.01)} y={mapY(500)} textAnchor="start" fill={colors.ferrite} fontSize="16">α</text>
           <text x={mapX(Math.max(0.05, dynamicC1 / 3))} y={mapY(dynamicA1 + 40)} fill={colors.ferrite}>α + γ</text>
@@ -1325,7 +1308,8 @@ const DiagramSkeleton = React.memo(() => {
         {(zoomSteel ? [0.5, 1.0, 1.5, 2.0, 2.5] : [1, 2, 3, 4, 5, 6]).map(c => (
           <g key={`tx-${c}`} transform={`translate(${mapX(c)}, ${h - m.bottom})`}>
             <line y2="6" stroke={axisColor} strokeWidth="2" />
-            <text y="20" className="opacity-80">{c}</text>
+            {/* FIX 3: Added fill={axisColor} to this line */}
+            <text y="20" className="opacity-80" fill={axisColor}>{c}</text>
           </g>
         ))}
         
@@ -1341,7 +1325,8 @@ const DiagramSkeleton = React.memo(() => {
         {[0, 200, 400, 600, 800, 1000, 1200, 1400, 1600].map(t => (
           <g key={`ty-${t}`} transform={`translate(${m.left}, ${mapY(t)})`}>
             <line x2="-5" stroke={axisColor} strokeWidth="2" />
-            <text x="-10" y="4" textAnchor="end" className="opacity-80">{t}</text>
+            {/* FIX 4: Added fill={axisColor} to this line */}
+            <text x="-10" y="4" textAnchor="end" className="opacity-80" fill={axisColor}>{t}</text>
           </g>
         ))}
 
@@ -2211,10 +2196,8 @@ const DiagramSection = () => {
 
 const KineticsDiagramSection = () => {
   const { carbon, temp, historyTrail, simState, alloy, isTourActive, tourStep } = useThermoState();
-  
   const c = parseNum(carbon, 0);
   const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
-  
   const { theme, isDark } = useThermoAction();
   const { colors } = theme;
   const currentT = parseNum(temp, 20);
@@ -2223,20 +2206,25 @@ const KineticsDiagramSection = () => {
   const [diagramMode, setDiagramMode] = useState('cct'); 
   const svgRef = useRef(null);
 
-  // --- ÚJ AI ÁLLAPOTOK (STATE) ---
+  // --- AI PREDICTION STATE ---
   const [aiPredictions, setAiPredictions] = useState(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  // --- ÚJ AI PREDikciós FÜGGVÉNY ---
   const handleAIPrediction = async () => {
     setIsAiLoading(true);
-    // Feltételezve, hogy a MLKineticsEngine definiálva van fentebb
     const results = await MLKineticsEngine.predictTransformationTimes(alloy);
-    setAiPredictions(results);
+    if (results) setAiPredictions(results);
     setIsAiLoading(false);
   };
 
-  // VISSZAÁLLÍTOTT VÁLTOZÓK (Ezek tűntek el!)
+  useEffect(() => { setAiPredictions(null); }, [alloy]);
+
+  const formatTime = (secs) => {
+    if (secs < 60) return `${secs.toFixed(2)}s`;
+    if (secs < 3600) return `${(secs / 60).toFixed(1)}m`;
+    return `${(secs / 3600).toFixed(1)}h`;
+  };
+
   const w = 850, h = 400; const m = { top: 40, right: 60, bottom: 60, left: 70 };
   const innerW = w - m.left - m.right; const innerH = h - m.top - m.bottom;
   const minLog = -1; const maxLog = 5; const maxTemp = 900;
@@ -2337,7 +2325,6 @@ const KineticsDiagramSection = () => {
           </h2>
         </div>
         <div className="flex gap-2">
-           {/* --- AI PREDICT GOMB --- */}
            <button onClick={handleAIPrediction} disabled={isAiLoading} className={cn(isAiLoading ? 'bg-indigo-500/50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500', "text-white font-semibold font-display tracking-widest text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all")}>
              {isAiLoading ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} AI Predict
            </button>
@@ -2346,20 +2333,19 @@ const KineticsDiagramSection = () => {
         </div>
       </div>
 
-      {/* --- AI PREDIKCIÓS EREDMÉNYEK MEGJELENÍTÉSE --- */}
       {aiPredictions && (
         <div className={cn("mb-4 p-4 rounded-xl flex justify-around border", isDark ? 'bg-indigo-900/20 border-indigo-500/30' : 'bg-indigo-50 border-indigo-200')}>
            <div className="text-center">
              <div className="font-display text-[10px] tracking-widest uppercase opacity-70 mb-1 font-bold text-indigo-500">Ferrite Start (Nose)</div>
-             <div className="font-data text-sm font-bold">{aiPredictions.tauFerrite < 60 ? aiPredictions.tauFerrite.toFixed(2) + 's' : (aiPredictions.tauFerrite/60).toFixed(1) + 'm'}</div>
+             <div className="font-data text-sm font-bold">{formatTime(aiPredictions.tauFerrite)}</div>
            </div>
            <div className="text-center border-l border-indigo-500/20 pl-4">
              <div className="font-display text-[10px] tracking-widest uppercase opacity-70 mb-1 font-bold text-indigo-500">Pearlite Start (Nose)</div>
-             <div className="font-data text-sm font-bold">{aiPredictions.tauPearlite < 60 ? aiPredictions.tauPearlite.toFixed(2) + 's' : (aiPredictions.tauPearlite/60).toFixed(1) + 'm'}</div>
+             <div className="font-data text-sm font-bold">{formatTime(aiPredictions.tauPearlite)}</div>
            </div>
            <div className="text-center border-l border-indigo-500/20 pl-4">
              <div className="font-display text-[10px] tracking-widest uppercase opacity-70 mb-1 font-bold text-indigo-500">Bainite Start (Nose)</div>
-             <div className="font-data text-sm font-bold">{aiPredictions.tauBainite < 60 ? aiPredictions.tauBainite.toFixed(2) + 's' : (aiPredictions.tauBainite/60).toFixed(1) + 'm'}</div>
+             <div className="font-data text-sm font-bold">{formatTime(aiPredictions.tauBainite)}</div>
            </div>
         </div>
       )}
@@ -2526,50 +2512,30 @@ const TelemetrySection = () => {
   const { colors } = theme;
   const [captureMsg, triggerCapture] = useEphemeralMessage(3000);
 
-  // --- NEW: AI MECHANICS STATE ---
+  // --- AI STATE ---
   const [aiMechanics, setAiMechanics] = useState(null);
   const [isMechanicsLoading, setIsMechanicsLoading] = useState(false);
 
-  // --- NEW: USE EFFECT TO TRIGGER AI (WITH DEBOUNCER) ---
   useEffect(() => {
     let isMounted = true;
-    let timeoutId;
+    let timeoutId; 
 
     const runMechanicsAI = async () => {
-      if (alloy.c > 1.5) {
-         if (isMounted) setAiMechanics(null); 
-         return;
-      }
-
+      if (alloy.c > 1.5) { if (isMounted) setAiMechanics(null); return; } // Guardrail
       setIsMechanicsLoading(true);
-
       const getFrac = (name) => simState.microFractions.find(f => f.name.includes(name))?.frac || 0;
       const fractions = {
-        ferrite: getFrac('Ferrite') + getFrac('Delta'),
-        pearlite: getFrac('Pearlite'),
-        bainite: getFrac('Bainite'),
+        ferrite: getFrac('Ferrite') + getFrac('Delta'), 
+        pearlite: getFrac('Pearlite'), bainite: getFrac('Bainite'),
         martensite: getFrac('Martensite') + getFrac('Tempered') 
       };
-
       const results = await MLMechanicsEngine.predictMechanics(alloy, fractions);
-
-      // Only update if we actually got results (didn't hit the concurrency lock)
-      if (isMounted && results) {
-        setAiMechanics(results);
-      }
+      if (isMounted && results) setAiMechanics(results);
       if (isMounted) setIsMechanicsLoading(false);
     };
 
-    // THE DEBOUNCER: Wait 150ms after the last slider movement before firing the AI
-    timeoutId = setTimeout(() => {
-       runMechanicsAI();
-    }, 150);
-
-    // CLEANUP: If the slider moves again before 150ms is up, cancel the previous request
-    return () => { 
-       isMounted = false; 
-       clearTimeout(timeoutId); 
-    };
+    timeoutId = setTimeout(() => { runMechanicsAI(); }, 150); // Debouncer
+    return () => { isMounted = false; clearTimeout(timeoutId); };
   }, [alloy, simState.microFractions]);
 
   const takeSnapshot = useCallback(() => { 
@@ -2577,7 +2543,6 @@ const TelemetrySection = () => {
     triggerCapture(); 
   }, [alloy, carbon, temp, mode, simState, setSnapshots, triggerCapture]);
 
-  // Restored full download logic
   const downloadSVG = useCallback(() => {
     if (!svgRef.current) return;
     const svgClone = svgRef.current.cloneNode(true);
@@ -2593,7 +2558,7 @@ const TelemetrySection = () => {
 
   const highlightClass = isTourActive && TOUR_STEPS[tourStep].target === 'telemetry' ? "ring-2 ring-emerald-500 z-50 transform scale-[1.01]" : "";
 
-  // --- Determine which values to show (AI preferred, fallback to Math) ---
+  // Switch between AI data and Math Data
   const displayYield = aiMechanics?.yield ?? simState.yield;
   const displayHardness = aiMechanics?.hardness ?? simState.hardness.hv;
   const displayUTS = aiMechanics?.uts ?? simState.uts;
@@ -2606,9 +2571,6 @@ const TelemetrySection = () => {
         <div className="flex items-center gap-2">
           <Activity size={16} className={theme.textMuted} />
           <h2 className="font-display text-[16px] tracking-widest uppercase font-semibold">TELEMETRY</h2>
-          {/* Show a tiny AI indicator when it is active */}
-          {aiMechanics && !isMechanicsLoading && <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] bg-indigo-500/20 text-indigo-500 font-bold border border-indigo-500/30">AI ENHANCED</span>}
-          {isMechanicsLoading && <Loader2 size={12} className="ml-2 animate-spin text-indigo-500" />}
         </div>
         <div className="flex items-center gap-1">
           <div className={cn("flex border rounded-md overflow-hidden", isDark ? 'border-[#2a2d35]' : 'border-[#D1CCC0]')}>
@@ -2668,14 +2630,12 @@ const TelemetrySection = () => {
         
         {/* BENTO BOX TIER 2: GAUGES */}
         <div className="grid grid-cols-2 gap-4">
-           {/* Update these to use the display values! */}
            <InstrumentGauge label="Yield Strength" value={displayYield} unit="MPa" max={2500} colorHex={isMechanicsLoading ? "#94a3b8" : "#3b82f6"} isDark={isDark} />
            <InstrumentGauge label="Hardness" value={displayHardness} unit="HV" max={1000} colorHex={isMechanicsLoading ? "#94a3b8" : "#a855f7"} isDark={isDark} />
         </div>
 
         {/* BENTO BOX TIER 3: TERTIARY READOUTS */}
         <div className="grid grid-cols-2 gap-4">
-           {/* Update these to use the display values! */}
            <CompactStat label="Ult. Tensile" val={displayUTS} unit="MPa" colorHex={isMechanicsLoading ? "#94a3b8" : "#f59e0b"} isDark={isDark} />
            <CompactStat label="Elongation" val={displayElongation} unit="%" colorHex={isMechanicsLoading ? "#94a3b8" : "#10b981"} isDark={isDark} />
         </div>
@@ -2775,6 +2735,25 @@ const GuidedDiscoveryOverlay = () => {
 const AppTourOverlay = () => {
   const { isTourActive, tourStep } = useThermoState();
   const { setTourStep, setHasSeenTour, isDark, theme } = useThermoAction();
+
+  // --- NEW: AUTO-SCROLL MECHANISM ---
+  useEffect(() => {
+    if (isTourActive) {
+      // Wait 50ms for React to apply the green highlight class to the new section
+      const timer = setTimeout(() => {
+        const highlightedElement = document.querySelector('.ring-emerald-500');
+        if (highlightedElement) {
+          // Smoothly pan the screen to center the highlighted element
+          highlightedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (tourStep === 0) {
+          // On Step 1 (Welcome), smoothly scroll back to the very top
+          window.scrollTo({ top: 0, behavior: 'smooth' }); 
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [tourStep, isTourActive]);
+
   if (!isTourActive) return null;
   const currentStep = TOUR_STEPS[tourStep];
 
