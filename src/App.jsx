@@ -7,7 +7,7 @@ import {
   AlertTriangle, Info, Database, Share2, Loader2,
   RefreshCw, Crosshair, Image as ImageIcon, Magnet, Github, Link as LinkIcon, Wand2, Settings, ChevronDown, ChevronUp,
   Compass, CheckCircle2, ChevronRight, X, PlayCircle, SkipForward, Undo2, Redo2,
-  ChevronLeft
+  ChevronLeft, Scale
 } from 'lucide-react';
 // ONNX AI Engine Imports
 import { InferenceSession, Tensor, env } from 'onnxruntime-web';
@@ -2528,9 +2528,81 @@ const getPhaseColor = (micro, colors) => {
   return colors.ferrite;
 };
 
+const AlloyComparisonOverlay = React.memo(({ snapshots, compareIds, onClose, isDark }) => {
+  const selected = snapshots.filter(s => compareIds.includes(s.id));
+  if (selected.length === 0) return null;
+
+  const metrics = [
+    { label: 'Carbon Content', render: s => `${(s.alloy?.c || s.c).toFixed(3)} wt%` },
+    { label: 'Alloying Elements', render: s => `${(s.alloy?.mn || 0.5).toFixed(2)}Mn ${(s.alloy?.si || 0.2).toFixed(2)}Si ${(s.alloy?.cr || 0).toFixed(2)}Cr ${(s.alloy?.mo || 0).toFixed(2)}Mo` },
+    { label: 'Processing Mode', render: s => s.mode.toUpperCase() },
+    { label: 'Microstructure', render: s => s.state.micro },
+    { label: 'Yield Strength', render: s => `${s.state.yield} MPa` },
+    { label: 'Ult. Tensile Str.', render: s => `${s.state.uts} MPa` },
+    { label: 'Hardness (HV)', render: s => `${s.state.hardness.hv} HV` },
+    { label: 'Elongation', render: s => `${s.state.elong}%` },
+    { label: 'Raw Material Cost', render: s => `$${s.state.cost?.toFixed(2) || '0.00'} /kg` },
+    { label: 'Embodied CO₂', render: s => `${s.state.co2?.toFixed(2) || '0.00'} kg/kg` },
+    { label: 'Distortion Risk', render: s => s.state.distortion?.toFixed(1) || '0.0' },
+  ];
+
+  return (
+     <div className={cn("fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-8 pointer-events-auto")}>
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+        <div className={cn("relative w-full max-w-6xl max-h-[90vh] overflow-hidden rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border flex flex-col animate-in zoom-in-95", isDark ? "bg-[#0A0A0A]/95 border-white/10" : "bg-[#FCFAF5] border-[#E8E3D5]/80")}>
+           <div className="p-6 border-b border-inherit flex justify-between items-center bg-inherit z-20">
+               <h2 className="font-display tracking-widest font-semibold text-xl flex items-center gap-2">
+                  <Scale size={20} className="text-emerald-500"/> ALLOY COMPARISON
+               </h2>
+               <button onClick={onClose} className="p-2 bg-black/10 dark:bg-white/10 rounded-full hover:scale-105 transition-transform"><X size={16}/></button>
+           </div>
+           <div className="overflow-y-auto custom-scrollbar p-6">
+               <table className="w-full text-left border-collapse font-data text-xs">
+                   <thead>
+                       <tr>
+                           <th className="p-4 border-b border-inherit font-display tracking-widest opacity-50 w-48">METRIC</th>
+                           {selected.map((s, i) => (
+                               <th key={s.id} className="p-4 border-b border-inherit font-display tracking-widest text-base">
+                                   <span className="text-emerald-500">Option {i + 1}</span>
+                                   <div className="font-data text-[10px] opacity-60 mt-1 font-normal tracking-normal text-current">{s.t.toFixed(0)}°C</div>
+                               </th>
+                           ))}
+                       </tr>
+                   </thead>
+                   <tbody>
+                       {metrics.map((metric, i) => (
+                           <tr key={i} className={isDark ? 'even:bg-white/[0.02] hover:bg-[#2a2d35]' : 'even:bg-black/[0.02] hover:bg-[#EAE4D6]'}>
+                               <td className="p-4 border-b border-inherit font-semibold opacity-80">{metric.label}</td>
+                               {selected.map(s => (
+                                   <td key={s.id} className={cn("p-4 border-b border-inherit font-bold", metric.label.includes('Microstructure') ? 'text-emerald-500' : '')}>
+                                      {metric.render(s)}
+                                   </td>
+                               ))}
+                           </tr>
+                       ))}
+                   </tbody>
+               </table>
+           </div>
+        </div>
+     </div>
+  );
+});
+
 const SnapshotSection = () => {
   const { snapshots, setSnapshots, changeMode, setAlloy, setTemp, theme, isDark } = useThermoAction();
+  const [compareIds, setCompareIds] = useState([]);
+  const [showCompare, setShowCompare] = useState(false);
+
   const restoreSnapshot = useCallback((s) => { changeMode('manual', false); setAlloy(s.alloy || { c: s.c, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, v: 0, cu: 0 }); setTemp(s.t.toString()); }, [changeMode, setAlloy, setTemp]);
+
+  const toggleCompare = (e, id) => {
+     e.stopPropagation();
+     setCompareIds(prev => {
+         if (prev.includes(id)) return prev.filter(x => x !== id);
+         if (prev.length >= 3) return [...prev.slice(1), id]; // Keep max 3 for clean layout
+         return [...prev, id];
+     });
+  };
 
   return (
     <section className={cn("border rounded-2xl p-6 md:p-8 shrink-0", theme.panelBg)}>
@@ -2538,24 +2610,40 @@ const SnapshotSection = () => {
         <h3 className="font-display text-[14px] tracking-widest flex items-center gap-2 font-semibold">
           <Activity size={14}/> Snapshots ({snapshots.length})
         </h3>
-        <button onClick={() => setSnapshots([])} className="text-red-500 hover:text-red-400 flex items-center gap-2 font-display text-[10px] tracking-widest transition-colors font-semibold"><Trash2 size={12}/> Clear</button>
+        <div className="flex items-center gap-3">
+           {compareIds.length > 1 && (
+               <button onClick={() => setShowCompare(true)} className="px-3 py-1.5 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-lg flex items-center gap-2 font-display text-[10px] tracking-widest font-semibold hover:bg-emerald-500/20 transition-colors animate-in fade-in duration-300">
+                   <Scale size={12}/> Compare ({compareIds.length})
+               </button>
+           )}
+           <button onClick={() => { setSnapshots([]); setCompareIds([]); }} className="text-red-500 hover:text-red-400 flex items-center gap-2 font-display text-[10px] tracking-widest transition-colors font-semibold"><Trash2 size={12}/> Clear</button>
+        </div>
       </div>
       <div className="overflow-x-auto max-h-60 border border-inherit rounded-md">
         <table className="w-full text-left border-collapse font-data text-[11px]">
           <thead className={cn("sticky top-0 z-10 font-display text-[12px] tracking-widest", isDark ? 'bg-[#0b0c0f] text-slate-400' : 'bg-[#EAE4D6] text-[#7C7665]')}>
-            <tr><th className="p-4 border-b border-inherit font-semibold">State</th><th className="p-4 border-b border-inherit font-semibold">Mode</th><th className="p-4 border-b border-inherit font-semibold">HV</th><th className="p-4 border-b border-inherit font-semibold">Microstructure</th></tr>
+            <tr>
+              <th className="p-4 border-b border-inherit text-center" width="40"><Scale size={12} className="mx-auto opacity-50"/></th>
+              <th className="p-4 border-b border-inherit font-semibold">State</th>
+              <th className="p-4 border-b border-inherit font-semibold">Mode</th>
+              <th className="p-4 border-b border-inherit font-semibold">HV</th>
+              <th className="p-4 border-b border-inherit font-semibold">Microstructure</th>
+            </tr>
           </thead>
           <tbody>
             {snapshots.map((s) => (
-              <tr 
-                key={s.id} 
-                onClick={() => restoreSnapshot(s)} 
+              <tr
+                key={s.id}
+                onClick={() => restoreSnapshot(s)}
                 title={`Preview: ${s.state.micro}`}
                 className={cn(
-                  "border-b border-inherit cursor-pointer relative group transition-colors", 
+                  "border-b border-inherit cursor-pointer relative group transition-colors",
                   isDark ? 'hover:bg-[#2a2d35] even:bg-white/[0.02]' : 'hover:bg-[#EAE4D6] even:bg-black/[0.02]'
                 )}
               >
+                <td className="p-4 border-b border-inherit text-center" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={compareIds.includes(s.id)} onChange={(e) => toggleCompare(e, s.id)} className="accent-emerald-500 w-3 h-3 cursor-pointer" />
+                </td>
                 <td className="p-4 relative">
                   <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: getPhaseColor(s.state.micro, theme.colors) }} />
                   <span className="ml-2 font-bold">{(s.alloy?.c || s.c).toFixed(2)}C</span> @ {s.t.toFixed(0)}°C
@@ -2568,6 +2656,8 @@ const SnapshotSection = () => {
           </tbody>
         </table>
       </div>
+
+      {showCompare && <AlloyComparisonOverlay snapshots={snapshots} compareIds={compareIds} onClose={() => setShowCompare(false)} isDark={isDark} theme={theme} />}
     </section>
   );
 };
