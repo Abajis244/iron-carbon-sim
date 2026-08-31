@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useMemo, useEffect, useRef, useCallback, useTransition } from 'react';
+import html2pdf from 'html2pdf.js';
 import { 
   Target, Layers, Zap, Search, Sun, Moon, 
   GraduationCap, MapPin, BookOpen, MousePointerClick, 
@@ -7,7 +8,7 @@ import {
   AlertTriangle, Info, Database, Share2, Loader2,
   RefreshCw, Crosshair, Image as ImageIcon, Magnet, Github, Link as LinkIcon, Wand2, Settings, ChevronDown, ChevronUp,
   Compass, CheckCircle2, ChevronRight, X, PlayCircle, SkipForward, Undo2, Redo2,
-  ChevronLeft, Scale
+  ChevronLeft, Scale, FileText, BarChart2
 } from 'lucide-react';
 // ONNX AI Engine Imports
 import { InferenceSession, Tensor, env } from 'onnxruntime-web';
@@ -390,7 +391,7 @@ const ThermoEngine = {
     return this.leverRule('alpha_Fe3C', 'Ferrite (α)', 'Cementite (Fe₃C)', safeC, c_al, CONSTANTS.FE_C.C_CEMENTITE);
   },
 
-  getState: function(alloy, T, rate, processMode, maxRateExperienced, lowestTemp, historyTrail = []) {
+  getState: function(alloy, T, rate, processMode, maxRateExperienced, lowestTemp, historyTrail = [], holdTime = 0) {
     const alloyObj = typeof alloy === 'object' ? alloy : { c: alloy, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, cu: 0, v: 0 };
     const safeC = Math.max(0, Math.min(CONSTANTS.FE_C.C_CEMENTITE, alloyObj.c));
     const safeT = Math.max(0, T);
@@ -484,11 +485,11 @@ const ThermoEngine = {
       msTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? msTemp : null,
       mfTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? mfTemp : null,
       bsTemp: safeC < CONSTANTS.FE_C.C_AUSTENITE_MAX ? bsTemp : null,
-      ...this.predictProperties(alloyObj, safeT, phaseFractions, microFractions, microState, activeRate)
+      ...this.predictProperties(alloyObj, safeT, phaseFractions, microFractions, microState, activeRate, holdTime)
     };
   },
 
-  predictProperties: function(alloy, T, phaseFractions, microFractions, microState, coolingRate) {
+  predictProperties: function(alloy, T, phaseFractions, microFractions, microState, coolingRate, holdTime = 0) {
     let c = alloy.c;
     let fLiq = phaseFractions.find(f => f.name.includes('Liquid'))?.frac / 100 || 0;
     if (fLiq > 0.99) return { micro: 'Uniform Liquid Phase', crystal: 'Amorphous', yield: 0, uts: 0, hardness: { hv: 0, hrc: 0, hb: 0 }, elong: 100, grainSize: 0, fatigue: 0, dbtt: 0, paramA: 0, paramC: 0 };
@@ -498,9 +499,19 @@ const ThermoEngine = {
     const consts = this.getAlloyAdjustedConstants(alloy);
 
     const effectiveT = T < consts.T_EUTECTOID ? consts.T_EUTECTOID : T;
-    let grainSizeASTM = Math.max(1, 10 - Math.max(0, effectiveT - 700) / 150); 
-    if (coolingRate > 5) grainSizeASTM += Math.min(4, coolingRate / 10); 
+    let grainSizeASTM = Math.max(1, 10 - Math.max(0, effectiveT - 700) / 150);
+    if (coolingRate > 5) grainSizeASTM += Math.min(4, coolingRate / 10);
     if (microState.isQuenched) grainSizeASTM = Math.min(14, grainSizeASTM + 4);
+
+    // --- NEW: Time-Dependent Arrhenius Grain Growth ---
+    if (holdTime > 0 && effectiveT > 600) {
+        // Grain size ASTM drops (meaning grains get physically larger) exponentially with heat & time
+        const Q_over_R = 18000; // Activation energy factor for Steel
+        const growthFactor = holdTime * Math.exp(-Q_over_R / (effectiveT + 273));
+        const astmDrop = Math.log10(1 + growthFactor * 2e8) * 1.5; 
+        grainSizeASTM = Math.max(0, grainSizeASTM - astmDrop);
+    }
+
     const d_mm = Math.pow(2, -(grainSizeASTM + 1)) * 25.4;
 
     const { mn, si, cr, ni, mo, cu, v } = alloy;
@@ -932,6 +943,7 @@ const ThermoProvider = ({ children }) => {
   const carbon = alloy.c.toString();
   const setCarbon = useCallback((val) => { setAlloy(prev => ({...prev, c: parseNum(typeof val === 'function' ? val(prev.c) : val, 0)})); }, []);
   const [temp, setTemp] = useState(initialT.toString());
+  const [holdTime, setHoldTime] = useState("0"); // NEW: Time-dependent hold
   const [phaseFlash, setPhaseFlash] = useState({ active: false, color: 'transparent' });
   const [isPending, startTransition] = useTransition();
   const svgRef = useRef(null);
@@ -1067,7 +1079,7 @@ const ThermoProvider = ({ children }) => {
 
   const activeGrade = useMemo(() => STEEL_GRADES.find(g => Math.abs(g.c - alloy.c) < 0.01 && Math.abs(g.mn - alloy.mn) < 0.1 && Math.abs(g.cr - alloy.cr) < 0.1), [alloy]);
   const weldStatus = useMemo(() => getWeldability(alloy), [alloy, activeGrade]);
-  const simState = useMemo(() => ThermoEngine.getState(alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp, historyTrail), [alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp, historyTrail]);
+  const simState = useMemo(() => ThermoEngine.getState(alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp, historyTrail, parseNum(holdTime, 0)), [alloy, currentT, coolingRate, mode, maxRate, effectiveLowestTemp, historyTrail, holdTime]);
   
   const maxC = zoomSteel ? 2.5 : CONSTANTS.FE_C.C_CEMENTITE;
   const geometry = useMemo(() => {
@@ -1099,9 +1111,8 @@ const ThermoProvider = ({ children }) => {
 
   const handleAlloyChange = useCallback((elem, val) => { changeMode('manual', true); setAlloy(prev => ({...prev, [elem]: parseNum(val, 0)})); }, [changeMode, setAlloy]);
 
-  const stateValue = useMemo(() => ({ alloy, carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending, guidedScenarioId, guidedStep, isTourActive, tourStep }), [alloy, carbon, temp, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending, guidedScenarioId, guidedStep, isTourActive, tourStep]);
-  const actionValue = useMemo(() => ({ alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, startTransition, showAdvancedAlloys, setShowAdvancedAlloys, showDeepDive, setShowDeepDive, setGuidedScenarioId, setGuidedStep, setTourStep, setHasSeenTour, startTour: () => { setHasSeenTour(false); setTourStep(0); }, undo, redo, canUndo, canRedo }), [alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, showAdvancedAlloys, setShowAdvancedAlloys, showDeepDive, setShowDeepDive, setGuidedScenarioId, setGuidedStep, setTourStep, setHasSeenTour, undo, redo, canUndo, canRedo]);
-
+  const stateValue = useMemo(() => ({ alloy, carbon, temp, holdTime, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending, guidedScenarioId, guidedStep, isTourActive, tourStep }), [alloy, carbon, temp, holdTime, simState, coolingRate, maxRate, historyTrail, activeGrade, weldStatus, phaseFlash, isPending, guidedScenarioId, guidedStep, isTourActive, tourStep]);
+  const actionValue = useMemo(() => ({ alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, setHoldTime, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, startTransition, showAdvancedAlloys, setShowAdvancedAlloys, showDeepDive, setShowDeepDive, setGuidedScenarioId, setGuidedStep, setTourStep, setHasSeenTour, startTour: () => { setHasSeenTour(false); setTourStep(0); }, undo, redo, canUndo, canRedo }), [alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, setHoldTime, isDark, setIsDark, zoomSteel, setZoomSteel, showWeldability, setShowWeldability, snapshots, setSnapshots, etchant, setEtchant, mode, changeMode, maxC, geometry, theme, svgRef, showAdvancedAlloys, setShowAdvancedAlloys, showDeepDive, setShowDeepDive, setGuidedScenarioId, setGuidedStep, setTourStep, setHasSeenTour, undo, redo, canUndo, canRedo]);
   return (
     <ThermoStateContext.Provider value={stateValue}>
       <ThermoActionContext.Provider value={actionValue}>
@@ -1916,8 +1927,8 @@ const TopNav = () => {
 };
 
 const ControlsSection = () => {
-  const { carbon, temp, mode, maxRate, isTourActive, tourStep } = useThermoState();
-  const { alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, changeMode, zoomSteel, setZoomSteel, theme, isDark, setShowAdvancedAlloys, undo, redo, canUndo, canRedo } = useThermoAction();
+  const { carbon, temp, holdTime, mode, maxRate, isTourActive, tourStep } = useThermoState();
+  const { alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, setHoldTime, changeMode, zoomSteel, setZoomSteel, theme, isDark, setShowAdvancedAlloys, undo, redo, canUndo, canRedo } = useThermoAction();
   const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
 
   const [mobileExpanded, setMobileExpanded] = useState(false);
@@ -2034,6 +2045,17 @@ const ControlsSection = () => {
                 </button>
               )}
             </div>
+            
+            {/* NEW: Isothermal Hold Time Slider */}
+            <div className="flex flex-col gap-2 mt-6 w-full md:w-64">
+                <div className="flex justify-between items-end">
+                    <label className="font-display text-[12px] tracking-widest text-[#ea580c] font-semibold">Isothermal Hold (Hours)</label>
+                    <span className="font-data text-[11px] font-bold text-slate-500">{holdTime} hr</span>
+                </div>
+                <input type="range" min="0" max="48" step="0.5" value={holdTime} onChange={(e) => setHoldTime(e.target.value)} className="w-full accent-[#ea580c] h-1.5 bg-slate-200 dark:bg-slate-700 appearance-none cursor-pointer rounded-full" />
+                <p className="font-data text-[9px] opacity-50 mt-1">Activates time-dependent grain growth above 600°C.</p>
+            </div>
+            
         </div>
         <SmartAssistant />
       </div>
@@ -2053,12 +2075,120 @@ const TargetInput = React.memo(({ label, targetKey, placeholder, targets, setTar
   </div>
 ));
 
+const SensitivityAnalysisOverlay = React.memo(({ onClose, isDark, theme }) => {
+  const { alloy, temp, mode, maxRate, coolingRate, historyTrail } = useThermoState();
+  const currentT = parseNum(temp, 20);
+  const [targetMetric, setTargetMetric] = useState('yield');
+
+  // Run the perturbation loop
+  const impacts = useMemo(() => {
+    const elements = ['c', 'mn', 'si', 'cr', 'ni', 'mo', 'v', 'cu'];
+    const step = 0.1; // Analyze the impact of adding exactly +0.1 wt%
+    
+    // Baseline state
+    const baselineState = ThermoEngine.getState(alloy, currentT, coolingRate, mode, maxRate, 20, historyTrail);
+
+    const getMetric = (state, metric) => {
+      if(metric === 'yield') return state.yield;
+      if(metric === 'uts') return state.uts;
+      if(metric === 'hardness') return state.hardness.hv;
+      if(metric === 'dbtt') return state.dbtt;
+      if(metric === 'cost') return state.cost;
+      if(metric === 'pren') return state.pren;
+      return 0;
+    };
+
+    const baselineVal = getMetric(baselineState, targetMetric);
+
+    return elements.map(el => {
+      const perturbedAlloy = { ...alloy, [el]: alloy[el] + step };
+      const perturbedState = ThermoEngine.getState(perturbedAlloy, currentT, coolingRate, mode, maxRate, 20, historyTrail);
+      const newVal = getMetric(perturbedState, targetMetric);
+      return { element: el, delta: newVal - baselineVal };
+    }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  }, [alloy, currentT, coolingRate, mode, maxRate, historyTrail, targetMetric]);
+
+  const maxAbsDelta = Math.max(...impacts.map(i => Math.abs(i.delta)), 0.001);
+
+  return (
+    <div className={cn("fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-8 pointer-events-auto")}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className={cn("relative w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border flex flex-col animate-in zoom-in-95", isDark ? "bg-[#0A0A0A]/95 border-white/10" : "bg-[#FCFAF5] border-[#E8E3D5]/80")}>
+        
+        <div className="p-6 border-b border-inherit flex justify-between items-center bg-inherit z-20">
+           <h2 className="font-display tracking-widest font-semibold text-xl flex items-center gap-2">
+              <BarChart2 size={20} className="text-blue-500"/> SENSITIVITY ANALYSIS
+           </h2>
+           <button onClick={onClose} className="p-2 bg-black/10 dark:bg-white/10 rounded-full hover:scale-105 transition-transform"><X size={16}/></button>
+        </div>
+        
+        <div className="p-6 overflow-y-auto custom-scrollbar flex flex-col gap-6">
+           <div className="flex justify-between items-center bg-black/5 dark:bg-white/5 p-4 rounded-xl border border-inherit">
+              <span className="font-data text-sm opacity-80">Effect of adding <strong>+0.1 wt%</strong> on:</span>
+              <select value={targetMetric} onChange={e => setTargetMetric(e.target.value)} className={cn("px-4 py-2 border rounded-lg font-display text-sm tracking-widest font-semibold cursor-pointer focus:outline-none shadow-sm", isDark ? 'bg-[#181a20] border-slate-700' : 'bg-white border-[#D1CCC0]')}>
+                <option value="yield">Yield Strength (MPa)</option>
+                <option value="uts">Ult. Tensile Str (MPa)</option>
+                <option value="hardness">Hardness (HV)</option>
+                <option value="dbtt">DBTT / Brittleness (°C)</option>
+                <option value="cost">Raw Material Cost ($/kg)</option>
+                <option value="pren">Corrosion Index (PREN)</option>
+              </select>
+           </div>
+
+           <div className="relative py-8 px-4">
+              {/* Center Axis Line */}
+              <div className="absolute top-0 bottom-0 left-1/2 w-px bg-slate-500/30 z-0"></div>
+              
+              <div className="flex flex-col gap-5 relative z-10">
+                {impacts.map((imp) => {
+                  const isPositive = imp.delta > 0;
+                  const widthPercent = (Math.abs(imp.delta) / maxAbsDelta) * 45; 
+                  const formatDelta = Math.abs(imp.delta) < 1 ? imp.delta.toFixed(3) : imp.delta.toFixed(1);
+                  
+                  return (
+                     <div key={imp.element} className="flex items-center w-full group">
+                        {/* Negative Impact (Left side) */}
+                        <div className="w-1/2 flex justify-end pr-6">
+                           {!isPositive && imp.delta !== 0 && (
+                              <div className="flex items-center gap-3 w-full justify-end">
+                                 <span className="font-data text-xs text-rose-500 opacity-50 group-hover:opacity-100 transition-opacity">{formatDelta}</span>
+                                 <div className="h-6 bg-rose-500/90 rounded-l-md shadow-sm" style={{ width: `${widthPercent}%` }}></div>
+                              </div>
+                           )}
+                        </div>
+                        
+                        {/* Element Bubble (Center) */}
+                        <div className="absolute left-1/2 -translate-x-1/2 bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 font-display font-bold text-[12px] w-9 h-9 rounded-full flex items-center justify-center border-4 border-[#FCFAF5] dark:border-[#0A0A0A] shadow-sm uppercase z-20 transition-transform group-hover:scale-110">
+                           {imp.element}
+                        </div>
+                        
+                        {/* Positive Impact (Right side) */}
+                        <div className="w-1/2 flex justify-start pl-6">
+                           {isPositive && imp.delta !== 0 && (
+                              <div className="flex items-center gap-3 w-full justify-start">
+                                 <div className="h-6 bg-emerald-500/90 rounded-r-md shadow-sm" style={{ width: `${widthPercent}%` }}></div>
+                                 <span className="font-data text-xs text-emerald-500 opacity-50 group-hover:opacity-100 transition-opacity">+{formatDelta}</span>
+                              </div>
+                           )}
+                        </div>
+                     </div>
+                  );
+                })}
+              </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const InverseDesignSection = () => {
   const { alloy, isTourActive, tourStep } = useThermoState();
   const { setAlloy, setCarbon, setTemp, changeMode, theme, isDark, startTransition } = useThermoAction();
   const [targets, setTargets] = useState({ hv: { val: '', weight: 1 }, yield: { val: '', weight: 1 }, uts: { val: '', weight: 1 }, elong: { val: '', weight: 1 } });
   const [results, setResults] = useState([]);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [showSensitivity, setShowSensitivity] = useState(false);
 
   const handleOptimize = () => {
     startTransition(() => setIsOptimizing(true)); 
@@ -2094,9 +2224,14 @@ const InverseDesignSection = () => {
           </h2>
           <p className="font-data text-[10px] opacity-80 mt-1">Nelder-Mead Simplex / 6-Dimensional Mapping</p>
         </div>
-        <button onClick={handleOptimize} disabled={isOptimizing} className={cn(isOptimizing ? 'bg-transparent text-slate-500 border-slate-500 cursor-not-allowed font-display text-xs tracking-widest px-4 py-2 border rounded-lg flex items-center gap-2 font-semibold' : theme.btnPrimary, "font-semibold font-display tracking-widest text-xs px-4 py-2")}>
-          {isOptimizing ? <><Loader2 size={14} className="animate-spin" /> Solving</> : <><Search size={14} /> Execute</>}
-        </button>
+        <div className="flex gap-3">
+          <button onClick={() => setShowSensitivity(true)} className={cn(theme.btnSecondary, "font-semibold font-display tracking-widest text-xs px-4 py-2 flex items-center gap-2")}>
+            <BarChart2 size={14} /> Sensitivity
+          </button>
+          <button onClick={handleOptimize} disabled={isOptimizing} className={cn(isOptimizing ? 'bg-transparent text-slate-500 border-slate-500 cursor-not-allowed font-display text-xs tracking-widest px-4 py-2 border rounded-lg flex items-center gap-2 font-semibold' : theme.btnPrimary, "font-semibold font-display tracking-widest text-xs px-4 py-2")}>
+            {isOptimizing ? <><Loader2 size={14} className="animate-spin" /> Solving</> : <><Search size={14} /> Execute</>}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -2135,6 +2270,7 @@ const InverseDesignSection = () => {
             ))}
         </div>
       )}
+      {showSensitivity && <SensitivityAnalysisOverlay onClose={() => setShowSensitivity(false)} isDark={isDark} theme={theme} />}
     </section>
   );
 };
@@ -2535,7 +2671,7 @@ const AlloyComparisonOverlay = React.memo(({ snapshots, compareIds, onClose, isD
   const metrics = [
     { label: 'Carbon Content', render: s => `${(s.alloy?.c || s.c).toFixed(3)} wt%` },
     { label: 'Alloying Elements', render: s => `${(s.alloy?.mn || 0.5).toFixed(2)}Mn ${(s.alloy?.si || 0.2).toFixed(2)}Si ${(s.alloy?.cr || 0).toFixed(2)}Cr ${(s.alloy?.mo || 0).toFixed(2)}Mo` },
-    { label: 'Processing Mode', render: s => s.mode.toUpperCase() },
+    { label: 'Processing Mode', render: s => (s.mode || 'Manual').toUpperCase() },
     { label: 'Microstructure', render: s => s.state.micro },
     { label: 'Yield Strength', render: s => `${s.state.yield} MPa` },
     { label: 'Ult. Tensile Str.', render: s => `${s.state.uts} MPa` },
@@ -2712,6 +2848,24 @@ const TelemetrySection = () => {
   const downloadCSV = useCallback(() => ExportEngine.downloadBlob(ExportEngine.generateCSV(alloy, parseNum(temp), simState, snapshots), 'text/csv', `SteelLab_Data.csv`), [alloy, temp, simState, snapshots]);
   const downloadTXT = useCallback(() => ExportEngine.downloadBlob(ExportEngine.generateTXT(alloy, parseNum(temp), mode, simState, weldStatus), 'text/plain', `SteelLab_Report.txt`), [alloy, temp, mode, simState, weldStatus]);
 
+  // --- NEW: PDF REPORT GENERATOR ---
+  const downloadPDF = useCallback(() => {
+    triggerCapture(); // Triggers the "Snapshot saved" toast notification
+    
+    // We target the 'main' tag to capture the diagrams, controls, and telemetry all at once
+    const element = document.querySelector('main'); 
+    
+    const opt = {
+      margin:       0.3,
+      filename:     `ABAJIS_SteelLab_Report_${alloy.c.toFixed(2)}C.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      jsPDF:        { unit: 'in', format: 'a3', orientation: 'landscape' } // A3 Landscape fits the wide dashboard perfectly
+    };
+
+    html2pdf().set(opt).from(element).save();
+  }, [alloy, triggerCapture]);
+
   const highlightClass = isTourActive && TOUR_STEPS[tourStep].target === 'telemetry' ? "ring-2 ring-emerald-500 z-50 transform scale-[1.01]" : "";
 
   // Switch between AI data and Math Data
@@ -2729,12 +2883,15 @@ const TelemetrySection = () => {
           <h2 className="font-display text-[16px] tracking-widest uppercase font-semibold">TELEMETRY</h2>
         </div>
         <div className="flex items-center gap-1">
-          <div className={cn("flex border rounded-md overflow-hidden", isDark ? 'border-[#2a2d35]' : 'border-[#D1CCC0]')}>
+         <div className={cn("flex border rounded-md overflow-hidden", isDark ? 'border-[#2a2d35]' : 'border-[#D1CCC0]')}>
             <button onClick={downloadTXT} className="p-2 hover:bg-slate-500/20 transition-colors" title="TXT"><Download size={14} /></button>
             <div className={cn("w-px", isDark ? 'bg-[#2a2d35]' : 'bg-[#D1CCC0]')}></div>
             <button onClick={downloadSVG} className="p-2 hover:bg-slate-500/20 transition-colors" title="SVG"><ImageIcon size={14} /></button>
             <div className={cn("w-px", isDark ? 'bg-[#2a2d35]' : 'bg-[#D1CCC0]')}></div>
             <button onClick={downloadCSV} className="p-2 hover:bg-slate-500/20 transition-colors" title="CSV"><FileSpreadsheet size={14} /></button>
+            <div className={cn("w-px", isDark ? 'bg-[#2a2d35]' : 'bg-[#D1CCC0]')}></div>
+            {/* New PDF Button */}
+            <button onClick={downloadPDF} className="p-2 hover:bg-emerald-500/20 text-emerald-500 transition-colors" title="Download PDF Report"><FileText size={14} /></button>
           </div>
         </div>
       </div>
