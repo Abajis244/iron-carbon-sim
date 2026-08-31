@@ -2869,11 +2869,14 @@ const TelemetrySection = () => {
   const highlightClass = isTourActive && TOUR_STEPS[tourStep].target === 'telemetry' ? "ring-2 ring-emerald-500 z-50 transform scale-[1.01]" : "";
 
   // Switch between AI data and Math Data
-  const displayYield = aiMechanics?.yield ?? simState.yield;
-  const displayHardness = aiMechanics?.hardness ?? simState.hardness.hv;
-  const displayUTS = aiMechanics?.uts ?? simState.uts;
-  const displayElongation = aiMechanics?.elongation ?? simState.elong;
-
+  // The AI was trained on static room-temperature data. We must hand control back to the 
+  // classical physics engine during high-temperature treatments or isothermal holds.
+  const isStandard = parseNum(temp, 20) <= 50 && parseNum(holdTime, 0) === 0;
+  
+  const displayYield = (aiMechanics?.yield && isStandard) ? aiMechanics.yield : simState.yield;
+  const displayHardness = (aiMechanics?.hardness && isStandard) ? aiMechanics.hardness : simState.hardness.hv;
+  const displayUTS = (aiMechanics?.uts && isStandard) ? aiMechanics.uts : simState.uts;
+  const displayElongation = (aiMechanics?.elongation && isStandard) ? aiMechanics.elongation : simState.elong;
   return (
     <section className={cn("border rounded-2xl flex flex-col xl:h-full overflow-hidden relative transition-all duration-300", theme.panelBg, highlightClass)}>
       
