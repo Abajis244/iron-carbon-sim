@@ -179,7 +179,7 @@ export const MLKineticsEngine = {
     if (!this.session) {
       try {
         console.log("Loading AI Kinetics Engine...");
-        this.session = await InferenceSession.create('./steellab_kinetics_model.onnx');
+        this.session = await InferenceSession.create('/steellab_kinetics_model.onnx');
         this.isReady = true;
       } catch (err) { console.error("Kinetics ONNX Error.", err); }
     }
@@ -216,7 +216,7 @@ export const MLMechanicsEngine = {
     if (!this.session) {
       try {
         console.log("Loading AI Mechanics Engine...");
-        this.session = await InferenceSession.create('./steellab_mechanical_model.onnx');
+        this.session = await InferenceSession.create('/steellab_mechanical_model.onnx');
         this.isReady = true;
       } catch (err) { console.error("Mechanics ONNX Error:", err); }
     }
@@ -764,8 +764,26 @@ const ExportEngine = {
 // ============================================================================
 
 const useLocalStorage = (key, initialValue) => {
-  const [storedValue, setStoredValue] = useState(initialValue);
-  return [storedValue, setStoredValue];
+  const [storedValue, setStoredValue] = useState(() => {
+    try {
+      const item = window.localStorage.getItem(key);
+      return item ? JSON.parse(item) : initialValue;
+    } catch (error) {
+      return initialValue;
+    }
+  });
+
+  const setValue = (value) => {
+    try {
+      const valueToStore = value instanceof Function ? value(storedValue) : value;
+      setStoredValue(valueToStore);
+      window.localStorage.setItem(key, JSON.stringify(valueToStore));
+    } catch (error) {
+      console.error("Error saving to localStorage", error);
+    }
+  };
+
+  return [storedValue, setValue];
 };
 
 const useEphemeralMessage = (duration = 2000) => {
@@ -862,18 +880,16 @@ const useDiagramInteractions = (svgRef, alloy, carbon, temp, setCarbon, setTemp,
   const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
 
   const getCoords = useCallback((e) => {
-    if (!svgRef.current) return { c: 0, t: 20 };
-    const rect = svgRef.current.getBoundingClientRect();
-    const scaleX = geometry.w / rect.width; const scaleY = geometry.h / rect.height;
-    let clientX = e.clientX; let clientY = e.clientY;
-    
-    if (e.touches && e.touches.length > 0) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
-    else if (e.changedTouches && e.changedTouches.length > 0) { clientX = e.changedTouches[0].clientX; clientY = e.changedTouches[0].clientY; }
-
-    let c = maxC === 0 ? geometry.m.left : ((clientX - rect.left) * scaleX - geometry.m.left) / geometry.innerW * maxC;
-    let t = CONSTANTS.FE_C.T_MAX - ((clientY - rect.top) * scaleY - geometry.m.top) / geometry.innerH * CONSTANTS.FE_C.T_MAX;
-    return { c: Math.max(0, Math.min(maxC, c)), t: Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, t)) };
-  }, [svgRef, maxC, geometry]); 
+  if (!svgRef.current) return { c: 0, t: 20 };
+  const rect = svgRef.current.getBoundingClientRect();
+  const scaleX = geometry.w / rect.width; 
+  const scaleY = geometry.h / rect.height;
+  
+  let c = maxC === 0 ? geometry.m.left : ((e.clientX - rect.left) * scaleX - geometry.m.left) / geometry.innerW * maxC;
+  let t = CONSTANTS.FE_C.T_MAX - ((e.clientY - rect.top) * scaleY - geometry.m.top) / geometry.innerH * CONSTANTS.FE_C.T_MAX;
+  
+  return { c: Math.max(0, Math.min(maxC, c)), t: Math.max(0, Math.min(CONSTANTS.FE_C.T_MAX, t)) };
+}, [svgRef, maxC, geometry]);
 
   const snapToCritical = useCallback((c, t) => {
       let snapC = c; let snapT = t;
@@ -1029,6 +1045,12 @@ const ThermoProvider = ({ children }) => {
   const playPhaseSound = useCallback((type) => {
       try {
           const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          
+          // ADD THIS CHECK: Prevent errors if browser blocks autoplay
+          if (ctx.state === 'suspended') {
+              return; 
+          }
+
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
           const filter = ctx.createBiquadFilter();
@@ -2849,26 +2871,35 @@ const TelemetrySection = () => {
   const downloadTXT = useCallback(() => ExportEngine.downloadBlob(ExportEngine.generateTXT(alloy, parseNum(temp), mode, simState, weldStatus), 'text/plain', `SteelLab_Report.txt`), [alloy, temp, mode, simState, weldStatus]);
 
   // --- NEW: PDF REPORT GENERATOR ---
-  const downloadPDF = useCallback(() => {
-    triggerCapture(); // Triggers the "Snapshot saved" toast notification
+ const downloadPDF = useCallback(() => {
+    triggerCapture(); 
     
-    // We target the 'main' tag to capture the diagrams, controls, and telemetry all at once
     const element = document.querySelector('main'); 
+    if (!element) return;
+
+    // 1. Save original styles
+    const originalHeight = element.style.height;
+    const originalOverflow = element.style.overflow;
+
+    // 2. Force the element to expand to its full height
+    element.style.height = 'auto';
+    element.style.overflow = 'visible';
     
     const opt = {
       margin:       0.3,
       filename:     `ABAJIS_SteelLab_Report_${alloy.c.toFixed(2)}C.pdf`,
       image:        { type: 'jpeg', quality: 0.98 },
       html2canvas:  { scale: 2, useCORS: true, logging: false },
-      jsPDF:        { unit: 'in', format: 'a3', orientation: 'landscape' } // A3 Landscape fits the wide dashboard perfectly
+      jsPDF:        { unit: 'in', format: 'a3', orientation: 'landscape' }
     };
 
-    html2pdf().set(opt).from(element).save();
+    // 3. Generate PDF, then restore original styles
+    html2pdf().set(opt).from(element).save().then(() => {
+        element.style.height = originalHeight;
+        element.style.overflow = originalOverflow;
+    });
   }, [alloy, triggerCapture]);
-
-  const highlightClass = isTourActive && TOUR_STEPS[tourStep].target === 'telemetry' ? "ring-2 ring-emerald-500 z-50 transform scale-[1.01]" : "";
-
-  // Switch between AI data and Math Data
+    // Switch between AI data and Math Data
   // The AI was trained on static room-temperature data. We must hand control back to the 
   // classical physics engine during high-temperature treatments or isothermal holds.
   const isStandard = parseNum(temp, 20) <= 50 && parseNum(holdTime, 0) === 0;
