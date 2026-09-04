@@ -747,12 +747,13 @@ const ExportEngine = {
     return `ABAJIS-SteelLab Analytical Report\nGenerated: ${timestamp}\nVersion: ${APP_VERSION}\n\n====================================================\nCOMPOSITION & THERMAL STATE\n====================================================\nCarbon Content   : ${alloy.c.toFixed(3)} wt%\nAlloying Elements: Mn:${alloy.mn.toFixed(2)}% Si:${alloy.si.toFixed(2)}% Cr:${alloy.cr.toFixed(2)}% Ni:${alloy.ni.toFixed(2)}% Mo:${alloy.mo.toFixed(2)}% V:${alloy.v.toFixed(2)}% Cu:${alloy.cu.toFixed(2)}%\nTemperature      : ${temp.toFixed(1)} °C\nProcessing Mode  : ${mode.toUpperCase()}\nPhase Region     : ${state.regionLabel}\nState            : ${state.isQuenched ? 'Martensitic Transformation' : state.isBainitic ? 'Bainitic Transformation' : 'Equilibrium / Near-Equilibrium'}\n\n====================================================\nPHASE CONSTITUTION (Thermodynamic)\n====================================================\n${fracStr}\n\n====================================================\nMICROCONSTITUENTS (Morphological)\n====================================================\n${microStr}\nCrystal Structure: ${state.crystal}\nLattice Param a  : ${state.paramA.toFixed(4)} Å\nLattice Param c  : ${state.paramC.toFixed(4)} Å\nASTM Grain Size  : G${state.grainSize.toFixed(1)}\n\n====================================================\nMECHANICAL PREDICTIONS (at T=${temp.toFixed(0)}°C)\n====================================================\nYield Strength   : ${state.yield} MPa\nUlt. Tensile Str : ${state.uts} MPa\nFatigue Limit    : ${state.fatigue} MPa\nHardness         : ${state.hardness.hv} HV / ${state.hardness.hrc > 0 ? state.hardness.hrc + ' HRC' : state.hardness.hb + ' HB'}\nElongation       : ${state.elong}%\nDBTT             : ${state.dbtt} °C\n\n====================================================\nWELDABILITY (IIW Carbon Equivalent Model)\n====================================================\nRating           : ${weldStatus.rating}\nC.E. Value       : ${weldStatus.ce}\nNotes            : ${weldStatus.desc}\n`.trim();
   },
   generateCSV: (alloy, temp, state, snapshots) => {
-    const headers = "Source,C_wt%,Mn_wt%,Si_wt%,Cr_wt%,Ni_wt%,Mo_wt%,V_wt%,Cu_wt%,Temperature_C,Yield_MPa,UTS_MPa,Hardness_HV,Elongation_%,DBTT_C,Crystal,Microstructure\n";
-    let content = headers + `Current,${alloy.c.toFixed(3)},${alloy.mn.toFixed(2)},${alloy.si.toFixed(2)},${alloy.cr.toFixed(2)},${alloy.ni.toFixed(2)},${alloy.mo.toFixed(2)},${alloy.v.toFixed(2)},${alloy.cu.toFixed(2)},${temp.toFixed(1)},${state.yield},${state.uts},${state.hardness.hv},${state.elong},${state.dbtt},${state.crystal},"${state.micro}"\n`;
+    // ...
     if (snapshots && snapshots.length > 0) {
       snapshots.forEach((s, i) => { 
         let a = s.alloy || { c: s.c, mn: 0.5, si: 0.2, cr: 0, ni: 0, mo: 0, v: 0, cu: 0 };
-        content += `Snapshot_${i+1},${a.c.toFixed(3)},${a.mn.toFixed(2)},${a.si.toFixed(2)},${a.cr.toFixed(2)},${a.ni.toFixed(2)},${a.mo.toFixed(2)},${a.v.toFixed(2)},${a.cu.toFixed(2)},${s.t.toFixed(1)},${s.state.yield},${s.state.uts},${s.state.hv},${s.state.elong},${s.state.dbtt},${s.state.crystal},"${s.state.micro}"\n`; 
+        
+        // FIX: Change ${s.state.hv} to ${s.state.hardness.hv} in the line below
+        content += `Snapshot_${i+1},${a.c.toFixed(3)},${a.mn.toFixed(2)},${a.si.toFixed(2)},${a.cr.toFixed(2)},${a.ni.toFixed(2)},${a.mo.toFixed(2)},${a.v.toFixed(2)},${a.cu.toFixed(2)},${s.t.toFixed(1)},${s.state.yield},${s.state.uts},${s.state.hardness.hv},${s.state.elong},${s.state.dbtt},${s.state.crystal},"${s.state.micro}"\n`; 
       });
     }
     return content;
@@ -1988,9 +1989,9 @@ const ControlsSection = () => {
           .temp-slider-track { background: linear-gradient(to right, #000 0%, #8b0000 35%, #ff4500 55%, #ff8c00 70%, #ffd700 85%, #ffffff 100%) !important; }
           .temp-slider::-webkit-slider-thumb {
               -webkit-appearance: none; appearance: none; width: 14px; height: 24px;
-              background: ${getBlackbodyGlow(parseNum(temp, 20), 1)};
-              border: 2px solid ${isDark ? '#fff' : '#000'}; border-radius: 6px;
-              box-shadow: 0 0 10px ${getBlackbodyGlow(parseNum(temp, 20), 1)}; cursor: ew-resize;
+              background: var(--thumb-bg);
+              border: 2px solid var(--thumb-border); border-radius: 6px;
+              box-shadow: 0 0 10px var(--thumb-bg); cursor: ew-resize;
           }
         `}} />
 
@@ -2067,6 +2068,17 @@ const ControlsSection = () => {
                 </button>
               )}
             </div>
+
+            <input 
+              type="range" 
+              min="0" max={CONSTANTS.FE_C.T_MAX} step="1" 
+              value={parseNum(temp, 0)} onChange={handleT} 
+              className="w-full temp-slider temp-slider-track h-2 border border-slate-800 rounded-full appearance-none cursor-pointer" 
+              style={{ 
+                  '--thumb-bg': getBlackbodyGlow(parseNum(temp, 20), 1),
+                  '--thumb-border': isDark ? '#fff' : '#000'
+              }}
+            />
             
             {/* NEW: Isothermal Hold Time Slider */}
             <div className="flex flex-col gap-2 mt-6 w-full md:w-64">
@@ -2837,12 +2849,25 @@ const TelemetrySection = () => {
     const runMechanicsAI = async () => {
       if (alloy.c > 1.5) { if (isMounted) setAiMechanics(null); return; } // Guardrail
       setIsMechanicsLoading(true);
-      const getFrac = (name) => simState.microFractions.find(f => f.name.includes(name))?.frac || 0;
-      const fractions = {
-        ferrite: getFrac('Ferrite') + getFrac('Delta'), 
-        pearlite: getFrac('Pearlite'), bainite: getFrac('Bainite'),
-        martensite: getFrac('Martensite') + getFrac('Tempered') 
+      
+      // REPLACE FROM HERE...
+      let f_ferrite = 0, f_pearlite = 0, f_bainite = 0, f_martensite = 0;
+
+      simState.microFractions.forEach(f => {
+          if (f.name.includes('Pearlite')) f_pearlite += f.frac;
+          else if (f.name.includes('Bainite')) f_bainite += f.frac;
+          else if (f.name.includes('Martensite') || f.name.includes('Tempered')) f_martensite += f.frac;
+          else if (f.name.includes('Ferrite') || f.name.includes('Delta')) f_ferrite += f.frac;
+      });
+
+      const fractions = { 
+          ferrite: f_ferrite, 
+          pearlite: f_pearlite, 
+          bainite: f_bainite, 
+          martensite: f_martensite 
       };
+      // ...TO HERE
+
       const results = await MLMechanicsEngine.predictMechanics(alloy, fractions);
       if (isMounted && results) setAiMechanics(results);
       if (isMounted) setIsMechanicsLoading(false);
@@ -2894,11 +2919,17 @@ const TelemetrySection = () => {
     };
 
     // 3. Generate PDF, then restore original styles
+    // 3. Generate PDF, then restore original styles
     html2pdf().set(opt).from(element).save().then(() => {
         element.style.height = originalHeight;
         element.style.overflow = originalOverflow;
     });
   }, [alloy, triggerCapture]);
+
+  // ADD THIS LINE BACK IN
+  const highlightClass = isTourActive && TOUR_STEPS[tourStep].target === 'telemetry' ? "ring-2 ring-emerald-500 z-50 transform scale-[1.01]" : "";
+
+  // Switch between AI data and Math Data
     // Switch between AI data and Math Data
   // The AI was trained on static room-temperature data. We must hand control back to the 
   // classical physics engine during high-temperature treatments or isothermal holds.
