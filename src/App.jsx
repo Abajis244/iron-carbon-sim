@@ -2799,7 +2799,7 @@ const SnapshotSection = () => {
 };
 
 const TelemetrySection = () => {
-  const { alloy, carbon, temp, simState, mode, weldStatus, isTourActive, tourStep } = useThermoState();
+  const { alloy, carbon, temp, holdTime, simState, mode, weldStatus, isTourActive, tourStep } = useThermoState();
   const { snapshots, setSnapshots, etchant, setEtchant, theme, isDark, svgRef, setShowDeepDive } = useThermoAction();
   const { colors } = theme;
   const [captureMsg, triggerCapture] = useEphemeralMessage(3000);
