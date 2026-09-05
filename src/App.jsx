@@ -8,7 +8,7 @@ import {
   AlertTriangle, Info, Database, Share2, Loader2,
   RefreshCw, Crosshair, Image as ImageIcon, Magnet, Github, Link as LinkIcon, Wand2, Settings, ChevronDown, ChevronUp,
   Compass, CheckCircle2, ChevronRight, X, PlayCircle, SkipForward, Undo2, Redo2,
-  ChevronLeft, Scale, FileText, BarChart2
+  ChevronLeft, Scale, FileText, BarChart2, PenTool
 } from 'lucide-react';
 // ONNX AI Engine Imports
 import { InferenceSession, Tensor, env } from 'onnxruntime-web';
@@ -2014,7 +2014,129 @@ const TopNav = () => {
   );
 };
 
+const CustomCoolingOverlay = React.memo(({ onClose, isDark, theme }) => {
+  const { alloy } = useThermoState();
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
+  
+  const [points, setPoints] = useState([
+    { id: 1, time: 0.1, t: 900 },
+    { id: 2, time: 10, t: 600 },
+    { id: 3, time: 100, t: 20 }
+  ]);
+  const [results, setResults] = useState(null);
+
+  const addPoint = () => {
+    const last = points[points.length - 1];
+    setPoints([...points, { id: Date.now(), time: last.time * 5, t: Math.max(20, last.t - 100) }]);
+  };
+
+  const updatePoint = (id, field, val) => {
+    setPoints(points.map(p => p.id === id ? { ...p, [field]: parseNum(val, 0) } : p));
+  };
+
+  const removePoint = (id) => {
+    if (points.length <= 2) return;
+    setPoints(points.filter(p => p.id !== id));
+  };
+
+  const runSim = () => {
+    const sorted = [...points].sort((a,b) => a.time - b.time);
+    let history = [];
+    let maxRate = 0;
+    
+    for(let i=0; i < sorted.length - 1; i++) {
+      const p1 = sorted[i]; const p2 = sorted[i+1];
+      const dt = Math.max(0.1, p2.time - p1.time);
+      const dTemp = p1.t - p2.t;
+      const rate = dTemp / dt;
+      if (rate > maxRate) maxRate = rate;
+      
+      const steps = Math.max(5, Math.floor(Math.abs(dTemp) / 2));
+      for(let j=0; j<=steps; j++) {
+        history.push({ time: p1.time + dt*(j/steps), t: p1.t - dTemp*(j/steps) });
+      }
+    }
+    const finalT = sorted[sorted.length-1].t;
+    const state = ThermoEngine.getState(alloy, finalT, 0, 'custom', maxRate, 20, history);
+    setResults(state);
+  };
+
+  const w = 400, h = 200; const m = { top: 20, right: 20, bottom: 30, left: 40 };
+  const mapX = (time) => m.left + Math.max(0, Math.min(1, (Math.log10(Math.max(0.1, time)) + 1) / 6)) * (w - m.left - m.right); 
+  const mapY = (t) => m.top + Math.max(0, Math.min(1, 1 - t / 1000)) * (h - m.top - m.bottom);
+  const pathStr = points.length ? `M ${points.map(p => `${mapX(p.time)},${mapY(p.t)}`).join(' L ')}` : '';
+
+  return (
+    <div className={cn("fixed inset-0 z-[130] flex items-center justify-center p-4 sm:p-8 pointer-events-auto")}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className={cn("relative w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border flex flex-col animate-in zoom-in-95", isDark ? "bg-[#0A0A0A]/95 border-white/10" : "bg-[#FCFAF5] border-[#E8E3D5]/80")}>
+        
+        <div className="p-6 border-b border-inherit flex justify-between items-center bg-inherit z-20">
+           <h2 className="font-display tracking-widest font-semibold text-xl flex items-center gap-2">
+              <PenTool size={20} className="text-emerald-500"/> CUSTOM COOLING PATH
+           </h2>
+           <button onClick={onClose} className="p-2 bg-black/10 dark:bg-white/10 rounded-full hover:scale-105 transition-transform"><X size={16}/></button>
+        </div>
+        
+        <div className="p-6 overflow-y-auto custom-scrollbar flex flex-col md:flex-row gap-8">
+           {/* Left side: Coordinates Input */}
+           <div className="flex-1 flex flex-col gap-4">
+              <div className="font-display tracking-widest font-semibold text-sm opacity-80 uppercase border-b border-inherit pb-2">Thermal Coordinates</div>
+              {points.map((p, i) => (
+                  <div key={p.id} className="flex gap-2 items-center">
+                     <span className="font-data text-xs w-6 text-slate-500">P{i+1}</span>
+                     <div className="flex-1 flex flex-col">
+                        <span className="font-display text-[10px] opacity-70">Time (s)</span>
+                        <input type="number" value={p.time} onChange={(e) => updatePoint(p.id, 'time', e.target.value)} className={cn("w-full px-2 py-1 font-data text-xs border rounded focus:outline-none", isDark?'bg-[#181a20] border-slate-700':'bg-white border-[#D1CCC0]')} />
+                     </div>
+                     <div className="flex-1 flex flex-col">
+                        <span className="font-display text-[10px] opacity-70">Temp (°C)</span>
+                        <input type="number" value={p.t} onChange={(e) => updatePoint(p.id, 't', e.target.value)} className={cn("w-full px-2 py-1 font-data text-xs border rounded focus:outline-none", isDark?'bg-[#181a20] border-slate-700':'bg-white border-[#D1CCC0]')} />
+                     </div>
+                     <button onClick={() => removePoint(p.id)} className="mt-4 p-1.5 text-rose-500 hover:bg-rose-500/10 rounded transition-colors"><Trash2 size={14}/></button>
+                  </div>
+              ))}
+              <div className="flex gap-3 mt-2">
+                 <button onClick={addPoint} className={cn("flex-1 py-2 font-display tracking-widest text-xs font-semibold uppercase", theme.btnSecondary)}><Plus size={14} className="inline mr-1"/> Add Point</button>
+                 <button onClick={runSim} className={cn("flex-1 py-2 font-display tracking-widest text-xs font-semibold uppercase", theme.btnPrimary)}><Activity size={14} className="inline mr-1"/> Execute Path</button>
+              </div>
+           </div>
+
+           {/* Right side: Graph & Results */}
+           <div className="flex-1 flex flex-col gap-4">
+              <div className={cn("w-full border rounded-xl overflow-hidden", isDark ? 'bg-[#0f1115]/50 border-white/5' : 'bg-[#EAE4D6]/50 border-[#D1CCC0]')}>
+                 <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="block">
+                    <line x1={m.left} y1={mapY(consts.T_EUTECTOID)} x2={w-m.right} y2={mapY(consts.T_EUTECTOID)} stroke="#f43f5e" strokeWidth="1" strokeDasharray="4,4" opacity="0.6"/>
+                    <text x={w-m.right-5} y={mapY(consts.T_EUTECTOID)-5} textAnchor="end" className="font-data text-[10px]" fill="#f43f5e">A1</text>
+                    <path d={pathStr} fill="none" stroke="#ea580c" strokeWidth="2" />
+                    {points.map(p => <circle key={`c-${p.id}`} cx={mapX(p.time)} cy={mapY(p.t)} r="3" fill="#ea580c" />)}
+                    <path d={`M ${m.left} ${m.top} L ${m.left} ${h - m.bottom} L ${w - m.right} ${h - m.bottom}`} fill="none" stroke={isDark ? '#475569' : '#B0A896'} strokeWidth="2" />
+                 </svg>
+              </div>
+
+              {results ? (
+                 <div className={cn("p-4 border rounded-xl animate-in fade-in slide-in-from-bottom-2", isDark ? 'bg-white/5 border-white/10' : 'bg-black/5 border-[#D1CCC0]')}>
+                    <div className="font-display tracking-widest font-semibold text-sm opacity-80 uppercase mb-2">Simulated Outcome</div>
+                    <div className="font-data text-sm font-bold text-emerald-500 mb-4">{results.micro}</div>
+                    <div className="grid grid-cols-2 gap-4 border-t border-inherit pt-4">
+                       <div><div className="font-display text-[10px] opacity-70">Yield Strength</div><div className="font-data text-lg font-bold">{results.yield} MPa</div></div>
+                       <div><div className="font-display text-[10px] opacity-70">Hardness</div><div className="font-data text-lg font-bold">{results.hardness.hv} HV</div></div>
+                    </div>
+                 </div>
+              ) : (
+                 <div className="flex-1 border border-dashed rounded-xl flex items-center justify-center opacity-50 border-inherit">
+                    <div className="font-display tracking-widest text-xs uppercase">Awaiting Execution</div>
+                 </div>
+              )}
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const ControlsSection = () => {
+  const [showCustomCooling, setShowCustomCooling] = useState(false);
   const { carbon, temp, holdTime, mode, maxRate, isTourActive, tourStep } = useThermoState();
   const { alloy, setAlloy, handleAlloyChange, setCarbon, setTemp, setHoldTime, changeMode, zoomSteel, setZoomSteel, theme, isDark, setShowAdvancedAlloys, undo, redo, canUndo, canRedo } = useThermoAction();
   const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
@@ -2132,6 +2254,9 @@ const ControlsSection = () => {
                   <RefreshCw size={14} className={mode === 'temper' ? 'animate-spin' : ''} /> Temper
                 </button>
               )}
+              <button onClick={() => setShowCustomCooling(true)} className={cn("flex-1 md:flex-none px-5 py-2.5 border rounded-lg transition-colors flex items-center justify-center gap-2", theme.btnSecondary)}>
+                 <PenTool size={14} /> Custom
+              </button>
             </div>
 
             <input 
@@ -2155,9 +2280,10 @@ const ControlsSection = () => {
                 <p className="font-data text-[9px] opacity-50 mt-1">Activates time-dependent grain growth above 600°C.</p>
             </div>
             
-        </div>
+       </div>
         <SmartAssistant />
       </div>
+      {showCustomCooling && <CustomCoolingOverlay onClose={() => setShowCustomCooling(false)} isDark={isDark} theme={theme} />}
     </section>
   );
 };
