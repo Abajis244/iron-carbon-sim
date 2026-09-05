@@ -1828,6 +1828,7 @@ const AdvancedAlloysDrawer = () => {
 };
 
 const DeepDivePanel = () => {
+  const [showHAZ, setShowHAZ] = useState(false);
   const { simState, temp, alloy, weldStatus } = useThermoState();
   const { showDeepDive, setShowDeepDive, isDark, theme } = useThermoAction();
   
@@ -1872,16 +1873,21 @@ const DeepDivePanel = () => {
               </div>
 
               {/* Weldability Analysis */}
-              <div className={cn("col-span-1 flex flex-col justify-center p-6 border rounded-xl shadow-inner", weldStatus.bg)}>
-                 <div className="flex items-center gap-2 mb-4">
-                    <Shield size={18} className={weldStatus.color} />
-                    <div className={cn("font-display text-[14px] tracking-widest font-semibold", weldStatus.color)}>WELDABILITY RATING</div>
+              <div className={cn("col-span-1 flex flex-col justify-between p-6 border rounded-xl shadow-inner", weldStatus.bg)}>
+                 <div>
+                     <div className="flex items-center gap-2 mb-4">
+                        <Shield size={18} className={weldStatus.color} />
+                        <div className={cn("font-display text-[14px] tracking-widest font-semibold", weldStatus.color)}>WELDABILITY RATING</div>
+                     </div>
+                     <div className="flex justify-between items-end border-b border-inherit pb-4 mb-4">
+                        <div className={cn("font-display text-[24px] font-semibold", weldStatus.color)}>{weldStatus.rating}</div>
+                        <div className={cn("font-data text-[12px] font-semibold", weldStatus.color)}>C.E. : {weldStatus.ce}</div>
+                     </div>
+                     <div className={cn("font-data text-[12px] opacity-90", weldStatus.color)}>{weldStatus.desc}</div>
                  </div>
-                 <div className="flex justify-between items-end border-b border-inherit pb-4 mb-4">
-                    <div className={cn("font-display text-[24px] font-semibold", weldStatus.color)}>{weldStatus.rating}</div>
-                    <div className={cn("font-data text-[12px] font-semibold", weldStatus.color)}>C.E. : {weldStatus.ce}</div>
-                 </div>
-                 <div className={cn("font-data text-[12px] opacity-90", weldStatus.color)}>{weldStatus.desc}</div>
+                 <button onClick={() => setShowHAZ(true)} className={cn("mt-6 w-full py-2.5 rounded-lg font-display tracking-widest text-xs font-semibold flex items-center justify-center gap-2 transition-colors border", isDark ? 'bg-black/20 hover:bg-black/40 border-white/10' : 'bg-white/40 hover:bg-white/60 border-black/10', weldStatus.color)}>
+                     <Flame size={14} /> View HAZ Profile
+                 </button>
               </div>
 
               {/* Cooling Curve Plot */}
@@ -1891,10 +1897,73 @@ const DeepDivePanel = () => {
 
           </div>
       </div>
+      </div>
+      </div>
+      {showHAZ && <WeldHAZSimulator onClose={() => setShowHAZ(false)} isDark={isDark} theme={theme} />}
+    </div>
+  );
     </div>
   );
 };
 
+const WeldHAZSimulator = React.memo(({ onClose, isDark, theme }) => {
+  const { alloy, weldStatus } = useThermoState();
+  const consts = useMemo(() => ThermoEngine.getAlloyAdjustedConstants(alloy), [alloy]);
+
+  const zones = [
+    { name: 'Fusion Zone (FZ)', temp: `> ${CONSTANTS.FE_C.T_MELT}°C`, desc: 'Completely melted and re-solidified. Columnar cast dendritic structure.', color: 'from-white to-yellow-300', text: 'text-yellow-700 dark:text-yellow-200', border: 'border-yellow-400' },
+    { name: 'Coarse Grain (CGHAZ)', temp: `${Math.round(consts.T_A3_PURE + 200)}°C - ${CONSTANTS.FE_C.T_MELT}°C`, desc: 'Extreme grain growth. High hardenability leads to brittle martensite if cooling is rapid. Highest risk of hydrogen-induced cold cracking.', color: 'from-yellow-300 to-orange-500', text: 'text-orange-700 dark:text-orange-300', border: 'border-orange-500' },
+    { name: 'Fine Grain (FGHAZ)', temp: `${Math.round(consts.T_A3_PURE)}°C - ${Math.round(consts.T_A3_PURE + 200)}°C`, desc: 'Fully Austenitized but pinned grain growth. Normalizes upon cooling into fine, tough equiaxed grains.', color: 'from-orange-500 to-red-600', text: 'text-red-700 dark:text-red-300', border: 'border-red-500' },
+    { name: 'Intercritical (ICHAZ)', temp: `${Math.round(consts.T_EUTECTOID)}°C - ${Math.round(consts.T_A3_PURE)}°C`, desc: 'Partial transformation to Austenite. Results in a heterogeneous microstructure with localized soft and hard spots.', color: 'from-red-600 to-red-900', text: 'text-rose-700 dark:text-rose-300', border: 'border-red-800' },
+    { name: 'Sub-Critical / Base', temp: `< ${Math.round(consts.T_EUTECTOID)}°C`, desc: 'Unaffected by phase changes, though existing martensite may temper and soften near the ICHAZ boundary.', color: isDark ? 'from-red-900 to-[#0A0A0A]' : 'from-red-900 to-[#FCFAF5]', text: theme.textMain, border: isDark ? 'border-slate-700' : 'border-slate-300' }
+  ];
+
+  return (
+    <div className={cn("fixed inset-0 z-[130] flex items-center justify-center p-4 sm:p-8 pointer-events-auto")}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className={cn("relative w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border flex flex-col animate-in zoom-in-95", isDark ? "bg-[#0A0A0A]/95 border-white/10" : "bg-[#FCFAF5] border-[#E8E3D5]/80")}>
+        
+        <div className="p-6 border-b border-inherit flex justify-between items-center bg-inherit z-20">
+           <h2 className="font-display tracking-widest font-semibold text-xl flex items-center gap-2">
+              <Flame size={20} className={weldStatus.color}/> HAZ MICROSTRUCTURAL GRADIENT
+           </h2>
+           <button onClick={onClose} className="p-2 bg-black/10 dark:bg-white/10 rounded-full hover:scale-105 transition-transform"><X size={16}/></button>
+        </div>
+        
+        <div className="p-6 overflow-y-auto custom-scrollbar flex flex-col gap-8">
+           <div className={cn("flex flex-col md:flex-row justify-between items-start md:items-center p-4 rounded-xl border border-inherit gap-4", isDark ? 'bg-white/5' : 'bg-black/5')}>
+              <div>
+                  <div className="font-display tracking-widest font-semibold text-sm opacity-80 uppercase">Carbon Equivalent (CE)</div>
+                  <div className={cn("font-data text-2xl font-bold", weldStatus.color)}>{weldStatus.ce}</div>
+              </div>
+              <div className="md:text-right">
+                  <div className="font-display tracking-widest font-semibold text-sm opacity-80 uppercase">Weldability Prediction</div>
+                  <div className={cn("font-data text-lg font-bold", weldStatus.color)}>{weldStatus.desc}</div>
+              </div>
+           </div>
+
+           <div className="flex flex-col w-full">
+              <div className="w-full h-12 flex rounded-t-xl overflow-hidden mb-6 shadow-inner">
+                  {zones.map((zone, i) => (
+                      <div key={i} className={cn("h-full bg-gradient-to-r", zone.color)} style={{ width: i === 0 ? '15%' : i === 4 ? '30%' : '18.3%' }}></div>
+                  ))}
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                  {zones.map((zone, i) => (
+                      <div key={i} className={cn("p-4 border-t-4 rounded-b-xl flex flex-col gap-2", isDark ? 'bg-[#0f1115]/50' : 'bg-white/50', zone.border)}>
+                          <div className={cn("font-display font-bold tracking-widest text-sm uppercase leading-tight", zone.text)}>{zone.name}</div>
+                          <div className="font-data text-[10px] font-bold opacity-70 bg-black/5 dark:bg-white/5 px-2 py-1 rounded w-fit">{zone.temp}</div>
+                          <div className="font-data text-[11px] opacity-80 mt-2 leading-relaxed">{zone.desc}</div>
+                      </div>
+                  ))}
+              </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 const TopNav = () => {
   const { carbon, temp, alloy } = useThermoState();
