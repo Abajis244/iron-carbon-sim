@@ -1897,11 +1897,7 @@ const DeepDivePanel = () => {
 
           </div>
       </div>
-      </div>
-      </div>
       {showHAZ && <WeldHAZSimulator onClose={() => setShowHAZ(false)} isDark={isDark} theme={theme} />}
-    </div>
-  );
     </div>
   );
 };
